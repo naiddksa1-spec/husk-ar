@@ -29,20 +29,21 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/build/ios-arm64/sysroot/lib
           cp Payload/Husk.app/Frameworks/libqemu-aarch64-softmmu.dylib $GITHUB_WORKSPACE/build/ios-arm64/lib/
           cp Payload/Husk.app/Frameworks/libANGLE-shared.dylib $GITHUB_WORKSPACE/build/ios-arm64/sysroot/lib/
-          ls -lh $GITHUB_WORKSPACE/build/ios-arm64/lib/ $GITHUB_WORKSPACE/build/ios-arm64/sysroot/lib/
+          # ملفات الـ firmware التي يتوقعها سكربت البناء
+          mkdir -p $GITHUB_WORKSPACE/third_party/build/qemu-10.0.12-utm/pc-bios
+          bzip2 -c Payload/Husk.app/edk2-aarch64-code.fd > $GITHUB_WORKSPACE/third_party/build/qemu-10.0.12-utm/pc-bios/edk2-aarch64-code.fd.bz2
+          ls -lh $GITHUB_WORKSPACE/build/ios-arm64/lib/ $GITHUB_WORKSPACE/third_party/build/qemu-10.0.12-utm/pc-bios/
         env:
           GH_TOKEN: ${{ github.token }}
+
+      - name: Install qemu-img
+        run: brew install qemu
 
       - name: Fetch guest images
         run: ./scripts/fetch_phase0_guest.sh
 
       - name: Build and package IPA (unsigned)
-        run: |
-          cd src/app && xcodegen generate --quiet
-          xcodebuild -project Husk.xcodeproj -scheme Husk \
-            -sdk iphoneos -configuration Release \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            build 2>&1 | tail -100
+        run: ./scripts/package_ipa.sh /tmp/Hask-unsigned.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
