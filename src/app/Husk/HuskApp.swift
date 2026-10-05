@@ -41,10 +41,6 @@ struct HuskApp: App {
         // absent kills the process outright rather than returning an error.
         JITBootstrap.installTrapGuard()
 
-        // The bars belong to UIKit, and it reads their appearance once when it
-        // builds them. Set before the first view exists or the tab bar spends
-        // the session in the system's default grey.
-        Theme.applyBarAppearance()
     }
 
     var body: some Scene {

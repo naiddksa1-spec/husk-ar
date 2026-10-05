@@ -57,9 +57,6 @@ struct ContentView: View {
                     .tabItem { Label("الإعدادات", systemImage: "gearshape.fill") }
                     .tag(HuskTab.settings)
             }
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                HuskTabBar(selection: $router.tab)
-            }
             .opacity(showGuestScreen && started && runner.isRunning ? 0 : 1)
 
             // Outcomes, over whichever tab is showing. Above the tab bar rather

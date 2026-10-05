@@ -13,35 +13,26 @@ import UIKit
 /// Which appearance is shown is the user's choice (`Theme.Appearance`), and it
 /// defaults to dark, so nobody who already has the app sees it change.
 enum Theme {
-    /// The page. Near-black with a trace of blue in it, so surfaces above it
-    /// read as lifted rather than as grey boxes on black. In light, a cool
-    /// off-white, so the white cards have something to sit above.
-    static let bgUI = UIColor.husk(dark: (0.027, 0.047, 0.039), light: (0.953, 0.969, 0.961))
+    /// ألوان نظام iOS الأصلية — الواجهة تتبع نظام آبل مباشرة.
+    static let bgUI = UIColor.systemBackground
     static let bg = Color(uiColor: bgUI)
     /// Cards, rows, anything holding content.
-    static let surface = Color(uiColor: .husk(dark: (0.059, 0.094, 0.078),
-                                              light: (1.000, 1.000, 1.000)))
+    static let surface = Color(uiColor: .secondarySystemBackground)
     /// One step further up: chips, icon wells, the things that sit on a card.
-    static let surfaceHigh = Color(uiColor: .husk(dark: (0.094, 0.141, 0.118),
-                                                  light: (0.906, 0.937, 0.922)))
+    static let surfaceHigh = Color(uiColor: .tertiarySystemBackground)
     /// The edge that separates a surface from the page.
-    static let hairlineUI = UIColor { $0.userInterfaceStyle == .light
-        ? UIColor.black.withAlphaComponent(0.08) : UIColor.white.withAlphaComponent(0.07) }
+    static let hairlineUI = UIColor.separator
     static let hairline = Color(uiColor: hairlineUI)
 
-    static let textUI = UIColor.husk(dark: (0.949, 0.957, 0.976), light: (0.071, 0.078, 0.102))
+    static let textUI = UIColor.label
     static let text = Color(uiColor: textUI)
-    static let textDim = Color(uiColor: .husk(dark: (0.545, 0.573, 0.651),
-                                              light: (0.400, 0.424, 0.494)))
+    static let textDim = Color(uiColor: .secondaryLabel)
 
-    /// One accent, taken from the app icon, spent only on what you press. It
-    /// holds its contrast on both pages, so it is the one colour that does not
-    /// change.
-    static let accent = Color(red: 0.102, green: 0.729, blue: 0.514)
-    static let accentSoft = Color(red: 0.102, green: 0.729, blue: 0.514).opacity(0.16)
+    /// لون التمييز الأصلي للنظام.
+    static let accent = Color.accentColor
+    static let accentSoft = Color.accentColor.opacity(0.16)
     /// Darker on a light page: the dark-mode green all but vanishes on white.
-    static let good = Color(uiColor: .husk(dark: (0.204, 0.820, 0.478),
-                                           light: (0.122, 0.612, 0.333)))
+    static let good = Color(uiColor: .systemGreen)
     /// What a floating thing casts. A light page wants far less of it.
     static let shadow = Color(uiColor: UIColor { $0.userInterfaceStyle == .light
         ? UIColor.black.withAlphaComponent(0.12) : UIColor.black.withAlphaComponent(0.4) })
@@ -97,40 +88,8 @@ enum Theme {
 
     static var backdrop: some View { bg.ignoresSafeArea() }
 
-    /// Bars to match the page, applied once at launch. SwiftUI has no
-    /// vocabulary for the tab bar's own material, so this is UIKit's. The
-    /// colours are dynamic, so the bars follow the appearance without being
-    /// set again.
-    static func applyBarAppearance() {
-        let tab = UITabBarAppearance()
-        tab.configureWithOpaqueBackground()
-        tab.backgroundColor = bgUI
-        tab.shadowColor = hairlineUI
-        UITabBar.appearance().standardAppearance = tab
-        UITabBar.appearance().scrollEdgeAppearance = tab
-
-        let nav = UINavigationBarAppearance()
-        nav.configureWithOpaqueBackground()
-        nav.backgroundColor = bgUI
-        nav.shadowColor = .clear
-        nav.titleTextAttributes = [.foregroundColor: textUI]
-        nav.largeTitleTextAttributes = [.foregroundColor: textUI]
-        UINavigationBar.appearance().standardAppearance = nav
-        UINavigationBar.appearance().scrollEdgeAppearance = nav
-        UINavigationBar.appearance().compactAppearance = nav
-    }
 }
 
-extension UIColor {
-    /// A colour that is one thing on a dark page and another on a light one.
-    static func husk(dark: (CGFloat, CGFloat, CGFloat),
-                     light: (CGFloat, CGFloat, CGFloat)) -> UIColor {
-        UIColor { traits in
-            let c = traits.userInterfaceStyle == .light ? light : dark
-            return UIColor(red: c.0, green: c.1, blue: c.2, alpha: 1)
-        }
-    }
-}
 
 extension View {
     /// The app's one container: a lifted surface with a hairline edge.
@@ -162,43 +121,6 @@ extension View {
     }
 }
 
-/// The tab bar, drawn rather than borrowed.
-///
-/// `TabView` still owns the tabs — their selection, their view lifetime, their
-/// navigation stacks. Only the bar is ours: on iOS 26 the system draws it as a
-/// floating glass capsule sitting proud of the screen, which is not the flat
-/// bar pinned to the bottom edge that the design has. So the system's bar is
-/// hidden and this one is inset in its place.
-struct HuskTabBar: View {
-    @Binding var selection: HuskTab
-
-    var body: some View {
-        HStack(spacing: 0) {
-            ForEach(HuskTab.allCases) { tab in
-                Button {
-                    if selection != tab { UISelectionFeedbackGenerator().selectionChanged() }
-                    selection = tab
-                } label: {
-                    VStack(spacing: 4) {
-                        Image(systemName: tab.icon)
-                            .font(.system(size: 18, weight: .medium))
-                        Text(tab.title)
-                            .font(.system(size: 10, weight: .medium))
-                    }
-                    .foregroundStyle(selection == tab ? Theme.accent : Theme.textDim)
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 10).padding(.bottom, 4)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .background(alignment: .top) {
-            Rectangle().fill(Theme.hairline).frame(height: 0.5)
-        }
-        .background(Theme.bg.ignoresSafeArea(edges: .bottom))
-    }
-}
 
 /// Technical values — sizes, counts, frame rates, commit hashes — are set in a
 /// monospaced face so digits line up between rows and do not reflow as they
