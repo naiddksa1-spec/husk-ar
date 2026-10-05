@@ -37,7 +37,12 @@ jobs:
         run: ./scripts/fetch_phase0_guest.sh
 
       - name: Build and package IPA (unsigned)
-        run: ./scripts/package_ipa.sh /tmp/Hask-unsigned.ipa
+        run: |
+          cd src/app && xcodegen generate --quiet
+          xcodebuild -project Husk.xcodeproj -scheme Husk \
+            -sdk iphoneos -configuration Release \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tail -100
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
