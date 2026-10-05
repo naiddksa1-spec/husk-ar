@@ -19,40 +19,40 @@ struct SettingsTab: View {
                 Theme.backdrop
                 ScrollView {
                     VStack(alignment: .leading, spacing: 22) {
-                        HuskHeader(mark: true, title: "Settings")
+                        HuskHeader(mark: true, title: "الإعدادات")
 
-                        group("General") {
-                            link(LibrarySettings(), "square.grid.2x2", "Library",
-                                 "Your apps and their icons")
+                        group("عام") {
+                            link(LibrarySettings(), "square.grid.2x2", "المكتبة",
+                                 "تطبيقاتك وأيقوناتها")
                             RowDivider()
-                            link(PerformanceSettings(), "speedometer", "Performance",
-                                 "Renderer, sound")
+                            link(PerformanceSettings(), "speedometer", "الأداء",
+                                 "المعالج الرسومي، الصوت")
                             RowDivider()
-                            link(AppearanceSettings(), "paintbrush", "Appearance",
-                                 "Light or dark, app icon")
+                            link(AppearanceSettings(), "paintbrush", "المظهر",
+                                 "فاتح أو داكن، أيقونة التطبيق")
                         }
 
-                        group("Emulator") {
-                            link(JITSettings(), "bolt.circle", "JIT & sideload",
-                                 "Executable memory, starting up")
+                        group("المحاكي") {
+                            link(JITSettings(), "bolt.circle", "JIT والتثبيت اليدوي",
+                                 "ذاكرة التنفيذ، بدء التشغيل")
                             RowDivider()
-                            link(InputSettings(), "hand.tap", "Input",
-                                 "Screen, touch, keyboard")
+                            link(InputSettings(), "hand.tap", "الإدخال",
+                                 "الشاشة، اللمس، لوحة المفاتيح")
                             RowDivider()
-                            link(NetworkSettings(), "globe", "Network",
-                                 "Internet and saved sessions")
+                            link(NetworkSettings(), "globe", "الشبكة",
+                                 "الإنترنت والجلسات المحفوظة")
                             RowDivider()
                             link(SavedMachineSettings(), "externaldrive",
-                                 "Saved machine", "Snapshots and automatic saving")
+                                 "الجهاز المحفوظ", "اللقطات والحفظ التلقائي")
                         }
 
-                        group("Experimental") {
+                        group("تجريبي") {
                             link(TranslationLayerSettings(), "testtube.2",
                                  "Android Translation Layer",
-                                 "Apps without booting Android")
+                                 "تطبيقات بدون تشغيل أندرويد")
                         }
 
-                        group("About") {
+                        group("حول") {
                             NavigationLink { AboutSettings() } label: {
                                 HStack(spacing: 14) {
                                     HuskMark(size: 34)
@@ -60,7 +60,7 @@ struct SettingsTab: View {
                                         Text("Husk")
                                             .font(.system(size: 15, weight: .medium))
                                             .foregroundStyle(Theme.text)
-                                        Text("Version \(Bundle.main.version) "
+                                        Text("الإصدار \(Bundle.main.version) "
                                            + "· \(Bundle.main.commit)")
                                             .font(.system(size: 12))
                                             .foregroundStyle(Theme.textDim)
@@ -131,13 +131,13 @@ struct LibrarySettings: View {
     var body: some View {
         Form {
             Section {
-                DetailRow(label: "Apps", value: "\(host.packages.count)", mono: false)
-                DetailRow(label: "With icons",
+                DetailRow(label: "التطبيقات", value: "\(host.packages.count)", mono: false)
+                DetailRow(label: "مع أيقونات",
                           value: "\(host.packages.filter { $0.iconPath != nil }.count)",
                           mono: false)
             } footer: {
-                Text("The list is written to disk, so it is on screen before Android "
-                   + "has finished starting.")
+                Text("تُحفظ القائمة على الجهاز، فتظهر على الشاشة قبل أن يكمل أندرويد "
+                   + "التشغيل.")
             }
 
             Section {
@@ -145,7 +145,7 @@ struct LibrarySettings: View {
                     working = true
                     Task { await host.refreshPackages(); working = false }
                 } label: {
-                    Label(working ? "Refreshing…" : "Refresh from Android",
+                    Label(working ? "جارٍ التحديث…" : "تحديث من أندرويد",
                           systemImage: "arrow.clockwise")
                 }
                 .disabled(working || !host.isReady)
@@ -155,17 +155,16 @@ struct LibrarySettings: View {
                     working = true
                     Task { await host.refreshPackages(); working = false }
                 } label: {
-                    Label("Re-fetch icons", systemImage: "photo.on.rectangle")
+                    Label("إعادة جلب الأيقونات", systemImage: "photo.on.rectangle")
                 }
                 .disabled(working || !host.isReady)
             } footer: {
-                Text("Names and icons come from Android's own launcher, which keeps "
-                   + "the version it draws. Re-fetching throws away Husk's copies and "
-                   + "asks again.")
+                Text("الأسماء والأيقونات من مشغّل أندرويد نفسه، الذي يحتفظ بالنسخة "
+                   + "التي يرسمها. إعادة الجلب تتخلص من نسخ Husk وتطلب من جديد.")
             }
         }
         .huskForm()
-        .navigationTitle("Library")
+        .navigationTitle("المكتبة")
     }
 }
 
@@ -182,7 +181,7 @@ struct PerformanceSettings: View {
     var body: some View {
         Form {
             Section {
-                Picker("Renderer", selection: $gpuMode) {
+                Picker("المعالج الرسومي", selection: $gpuMode) {
                     Text("GPU").tag(true)
                     Text("CPU").tag(false)
                 }
@@ -192,48 +191,47 @@ struct PerformanceSettings: View {
                     HuskLog.log("ui", v ? "GPU renderer selected" : "CPU renderer selected")
                 }
             } header: {
-                Text("Renderer")
+                Text("المعالج الرسومي")
             } footer: {
                 Text(gpuMode
-                     ? "Android draws on the real GPU through Metal — about four times "
-                     + "the frame rate. This is the default."
-                     : "Every pixel is drawn by the emulated CPU. Much slower, and only "
-                     + "worth choosing if the GPU misbehaves.")
+                     ? "يرسم أندرويد على معالج الرسوميات الحقيقي عبر Metal — بمعدل "
+                     + "إطارات أعلى أربع مرات تقريبًا. هذا هو الافتراضي."
+                     : "كل بكسل يرسمه المعالج المحاكى. أبطأ بكثير، ولا يستحق "
+                     + "الاختيار إلا إذا أساء معالج الرسوميات التصرف.")
             }
 
             Section {
-                DetailRow(label: "Frame rate",
+                DetailRow(label: "معدل الإطارات",
                           value: runner.fps > 0
-                                 ? String(format: "%.0f fps", runner.fps) : "—")
-                DetailRow(label: "Guest screen",
+                                 ? String(format: "%.0f إ/ث", runner.fps) : "—")
+                DetailRow(label: "شاشة أندرويد",
                           value: "\(QemuRunner.lastGuestRes.w)×\(QemuRunner.lastGuestRes.h)")
             } header: {
-                Text("Now")
+                Text("الآن")
             }
 
             Section {
-                Toggle("Sound", isOn: $sound)
+                Toggle("الصوت", isOn: $sound)
                     .onChange(of: sound) { v in
                         UserDefaults.standard.set(v, forKey: "husk.sound")
                         HuskLog.log("ui", v ? "sound on" : "sound off")
                     }
                 if sound {
-                    Toggle("Attach the sound device", isOn: $soundDevice)
+                    Toggle("توصيل جهاز الصوت", isOn: $soundDevice)
                         .onChange(of: soundDevice) { v in
                             UserDefaults.standard.set(v, forKey: "husk.soundDevice")
                         }
                 }
             } header: {
-                Text("Sound")
+                Text("الصوت")
             } footer: {
-                Text("Adds a sound device. While it is attached Android cannot be "
-                   + "saved — QEMU refuses to snapshot a machine with one — so every "
-                   + "launch boots from cold. Turning it on or off costs a cold boot "
-                   + "either way.")
+                Text("يضيف جهاز صوت. وبينما هو موصّل لا يمكن حفظ أندرويد — QEMU "
+                   + "يرفض التقاط صورة لجهاز عليه جهاز صوت — فيقلع كل تشغيل من "
+                   + "الصفر. تشغيله أو إطفاؤه يكلف إقلاعًا باردًا في الحالتين.")
             }
         }
         .huskForm()
-        .navigationTitle("Performance")
+        .navigationTitle("الأداء")
     }
 }
 
@@ -250,11 +248,11 @@ struct InputSettings: View {
     /// shapes a phone guest is actually run at, not a catalogue of every panel
     /// ever made.
     private static let presets: [(name: String, w: Int, h: Int)] = [
-        ("Small — 360 × 800", 360, 800),
+        ("صغير — 360 × 800", 360, 800),
         ("HD — 720 × 1280", 720, 1280),
         ("Full HD — 1080 × 1920", 1080, 1920),
-        ("Landscape HD — 1280 × 720", 1280, 720),
-        ("Tablet — 1280 × 800", 1280, 800),
+        ("أفقي HD — 1280 × 720", 1280, 720),
+        ("لوحي — 1280 × 800", 1280, 800),
     ]
 
     private static func stored(_ key: String, _ fallback: Int) -> String {
@@ -271,9 +269,9 @@ struct InputSettings: View {
     var body: some View {
         Form {
             Section {
-                Picker("Screen", selection: $landscapeGuest) {
-                    Text("Portrait").tag(false)
-                    Text("Landscape").tag(true)
+                Picker("الشاشة", selection: $landscapeGuest) {
+                    Text("عمودي").tag(false)
+                    Text("أفقي").tag(true)
                 }
                 .pickerStyle(.segmented)
                 .disabled(customRes)
@@ -283,20 +281,19 @@ struct InputSettings: View {
                                         : "guest panel will be portrait")
                 }
             } header: {
-                Text("Screen")
+                Text("الشاشة")
             } footer: {
                 Text(customRes
-                     ? "A custom resolution sets the shape itself, so this does nothing "
-                     + "while it is on. Type a wide size for landscape."
-                     : "Android cannot reshape a screen once it is running, so a "
-                     + "landscape game on a portrait screen gets letterboxed into a "
-                     + "band and looks tiny. Creating it landscape is the only way it "
-                     + "can fill it — portrait apps are letterboxed instead. Costs one "
-                     + "cold boot.")
+                     ? "الدقة المخصصة تحدد الشكل بنفسها، فلا يفعل هذا شيئًا وهي "
+                     + "مفعّلة. اكتب مقاسًا عريضًا للوضع الأفقي."
+                     : "لا يستطيع أندرويد تغيير شكل الشاشة بعد تشغيلها، فتصبح اللعبة "
+                     + "الأفقية على شاشة عمودية شريطًا صغيرًا. إنشاؤها أفقية هو "
+                     + "الطريقة الوحيدة لملء الشاشة — أما التطبيقات العمودية "
+                     + "فتُحاط بأشرطة سوداء. يكلف إقلاعًا باردًا واحدًا.")
             }
 
             Section {
-                Toggle("Custom resolution", isOn: $customRes)
+                Toggle("دقة مخصصة", isOn: $customRes)
                     .onChange(of: customRes) { v in
                         UserDefaults.standard.set(v, forKey: "husk.customRes")
                         store()
@@ -306,7 +303,7 @@ struct InputSettings: View {
                     }
 
                 if customRes {
-                    Picker("Preset", selection: Binding(
+                    Picker("جاهز", selection: Binding(
                         get: { presetIndex },
                         set: { i in
                             guard i >= 0, i < Self.presets.count else { return }
@@ -317,11 +314,11 @@ struct InputSettings: View {
                         ForEach(0..<Self.presets.count, id: \.self) { i in
                             Text(Self.presets[i].name).tag(i)
                         }
-                        Text("Custom").tag(-1)
+                        Text("مخصص").tag(-1)
                     }
 
                     HStack {
-                        Text("Width")
+                        Text("العرض")
                         Spacer()
                         TextField("720", text: $widthText)
                             .keyboardType(.numberPad)
@@ -331,7 +328,7 @@ struct InputSettings: View {
                             .onChange(of: widthText) { _ in store() }
                     }
                     HStack {
-                        Text("Height")
+                        Text("الارتفاع")
                         Spacer()
                         TextField("1280", text: $heightText)
                             .keyboardType(.numberPad)
@@ -342,43 +339,41 @@ struct InputSettings: View {
                     }
 
                     if let size = effective {
-                        DetailRow(label: "Android will get",
+                        DetailRow(label: "سيحصل أندرويد على",
                                   value: "\(size.w) × \(size.h)")
                     } else {
-                        Text("Both sides must be between 240 and 2560.")
+                        Text("يجب أن يكون كلا البعدين بين 240 و2560.")
                             .font(.caption).foregroundStyle(.orange)
                     }
                 }
 
-                DetailRow(label: "Running now", value: running)
+                DetailRow(label: "يعمل الآن", value: running)
             } header: {
-                Text("Resolution")
+                Text("الدقة")
             } footer: {
-                Text("The panel is built when the machine starts, so a change costs "
-                   + "one cold boot, and the next save replaces the machine saved at "
-                   + "the old size — changing back costs another. Sizes are rounded "
-                   + "to a multiple of eight. Bigger is slower: every pixel is drawn "
-                   + "by an emulated phone. Android's density does not change with "
-                   + "the panel, so a larger one shows more rather than bigger.")
+                Text("تُبنى الشاشة عند بدء تشغيل الجهاز، فالتغيير يكلف إقلاعًا "
+                   + "باردًا واحدًا، والحفظ التالي يستبدل الجهاز المحفوظ بالمقاس "
+                   + "القديم — والعودة تكلف آخر. تُقرَّب المقاسات إلى مضاعفات "
+                   + "الثمانية. الأكبر أبطأ: كل بكسل يرسمه هاتف محاكى. كثافة "
+                   + "أندرويد لا تتغير مع الشاشة، فالأكبر يعرض أكثر لا أكبر.")
             }
 
             Section {
-                Text("Touch is always on. The keyboard and the rotate control are "
-                   + "in the pill at the bottom of the guest's screen; a gamepad "
-                   + "and a pointer are not wired through yet.")
+                Text("اللمس يعمل دائمًا. لوحة المفاتيح وزر التدوير في الشريط أسفل "
+                   + "شاشة الضيف؛ أما يد التحكم والمؤشر فغير موصولَين بعد.")
                     .font(.footnote).foregroundStyle(.secondary)
             } header: {
-                Text("Controls")
+                Text("عناصر التحكم")
             }
         }
         .huskForm()
-        .navigationTitle("Input")
+        .navigationTitle("الإدخال")
     }
 
     /// The panel the guest actually has, which only means anything while there
     /// is a guest: the stored value is last launch's until one starts.
     private var running: String {
-        guard QemuRunner.shared.isRunning else { return "not started" }
+        guard QemuRunner.shared.isRunning else { return "لم يبدأ" }
         return "\(QemuRunner.lastGuestRes.w) × \(QemuRunner.lastGuestRes.h)"
     }
 
@@ -403,30 +398,29 @@ struct NetworkSettings: View {
     var body: some View {
         Form {
             Section {
-                Toggle("Keep the network across saves", isOn: $keepNetwork)
+                Toggle("إبقاء الشبكة عند الحفظ", isOn: $keepNetwork)
                     .onChange(of: keepNetwork) { v in
                         UserDefaults.standard.set(v, forKey: "husk.keepNetwork")
                     }
             } footer: {
                 Text(keepNetwork
-                     ? "Saving closes apps but leaves Android's framework running, so "
-                     + "the network still works after a restore."
-                     : "Saving stops the framework too. Clears every GPU resource, "
-                     + "which is steadier — but the network may not come back until a "
-                     + "cold boot.")
+                     ? "الحفظ يغلق التطبيقات لكنه يُبقي إطار أندرويد يعمل، فتبقى "
+                     + "الشبكة تعمل بعد الاستعادة."
+                     : "الحفظ يوقف الإطار أيضًا. يمسح كل موارد معالج الرسوميات، "
+                     + "وهذا أكثر ثباتًا — لكن الشبكة قد لا تعود حتى إقلاع بارد.")
             }
 
             Section {
-                Text("Android reaches the internet through a virtual ethernet card "
-                   + "on QEMU's own network. Nothing on your phone's network can see "
-                   + "the guest, and the guest cannot see it.")
+                Text("يصل أندرويد إلى الإنترنت عبر بطاقة شبكة افتراضية على شبكة "
+                   + "QEMU الخاصة. لا شيء على شبكة هاتفك يستطيع رؤية الضيف، "
+                   + "والضيف لا يستطيع رؤيتها.")
                     .font(.footnote).foregroundStyle(.secondary)
             } header: {
-                Text("How it connects")
+                Text("كيف يتصل")
             }
         }
         .huskForm()
-        .navigationTitle("Network")
+        .navigationTitle("الشبكة")
     }
 }
 
@@ -440,26 +434,26 @@ struct JITSettings: View {
     var body: some View {
         Form {
             Section {
-                DetailRow(label: "Debugger",
-                          value: JITBootstrap.isDebuggerAttached ? "attached" : "not attached",
+                DetailRow(label: "المصحح",
+                          value: JITBootstrap.isDebuggerAttached ? "متصل" : "غير متصل",
                           mono: false)
-                DetailRow(label: "Executable memory",
-                          value: JITBootstrap.isLive ? "granted" : "not claimed", mono: false)
+                DetailRow(label: "ذاكرة قابلة للتنفيذ",
+                          value: JITBootstrap.isLive ? "مُمنَحة" : "غير مُحصَّلة", mono: false)
                 // The two routes, named separately. Either one is enough, and
                 // when someone reports "JIT does not work" these two rows are
                 // the whole diagnosis.
-                DetailRow(label: "Trap servicer",
-                          value: JITBootstrap.prewarmed ? "answering" : "not answering",
+                DetailRow(label: "معالج المصائد",
+                          value: JITBootstrap.prewarmed ? "يستجيب" : "لا يستجيب",
                           mono: false)
                 // Cached answer only: running the probe from a view body
                 // could freeze the app (see JITBootstrap.mapJITWorks).
                 DetailRow(label: "MAP_JIT",
-                          value: JITBootstrap.deviceEnforcesTXM ? "not used (TXM)"
-                               : JITBootstrap.mapJITResult.map { $0 ? "executes" : "refused" }
-                                 ?? "not tested",
+                          value: JITBootstrap.deviceEnforcesTXM ? "غير مستخدم (TXM)"
+                               : JITBootstrap.mapJITResult.map { $0 ? "يُنفَّذ" : "مرفوض" }
+                                 ?? "لم يُختبر",
                           mono: false)
-                DetailRow(label: "Debugger after setup",
-                          value: JITBootstrap.detached ? "detached" : "attached",
+                DetailRow(label: "المصحح بعد الإعداد",
+                          value: JITBootstrap.detached ? "منفصل" : "متصل",
                           mono: false)
                 if let why = JITBootstrap.lastFailure {
                     Text(why).font(.caption).foregroundStyle(.orange)
@@ -468,56 +462,53 @@ struct JITSettings: View {
                     Button {
                         _ = JITBootstrap.requestAttach()
                     } label: {
-                        Label("Enable JIT with StikDebug", systemImage: "bolt.fill")
+                        Label("تفعيل JIT عبر StikDebug", systemImage: "bolt.fill")
                     }
                     Button {
                         _ = JITBootstrap.requestTrollStoreAttach()
                     } label: {
-                        Label("Enable JIT with TrollStore", systemImage: "sparkles")
+                        Label("تفعيل JIT عبر TrollStore", systemImage: "sparkles")
                     }
                 }
             } header: {
                 Text("JIT")
             } footer: {
-                Text("Husk needs memory it can write and then execute, which on iOS "
-                   + "takes an attached debugger. There are two ways to get it: a "
-                   + "debugger that services trap requests, or a MAP_JIT mapping, "
-                   + "which the kernel allows any debugged process. Either one is "
-                   + "enough — which is available depends on the device and the iOS "
-                   + "version, so Husk tests both rather than assuming.")
+                Text("يحتاج Husk إلى ذاكرة يكتب فيها ثم ينفّذها، وهذا على iOS "
+                   + "يتطلب مصححًا متصلًا. هناك طريقتان للحصول عليه: مصحح يلبّي "
+                   + "طلبات المصائد، أو تعيين MAP_JIT الذي تسمح به النواة لأي "
+                   + "عملية مصحَّحة. أيٌّ منهما يكفي — والمتاح منهما يعتمد على "
+                   + "الجهاز وإصدار iOS، لذا يختبر Husk الاثنين بدل الافتراض.")
             }
 
             Section {
-                Toggle("Start Android on launch", isOn: $autoStart)
+                Toggle("تشغيل أندرويد عند الفتح", isOn: $autoStart)
                     .onChange(of: autoStart) { v in
                         UserDefaults.standard.set(v, forKey: "husk.autoStart")
                     }
             } footer: {
-                Text("Boots the guest as soon as Husk opens, when JIT is available.")
+                Text("يقلع الضيف فور فتح Husk عندما يكون JIT متاحًا.")
             }
 
             Section {
-                Toggle("Keep debugger attached", isOn: $keepAttached)
+                Toggle("إبقاء المصحح متصلًا", isOn: $keepAttached)
                     .onChange(of: keepAttached) { v in JITBootstrap.keepDebuggerAttached = v }
             } footer: {
-                Text("Off by default. Husk detaches StikDebug as soon as the "
-                   + "JIT region is held, because a debugger that iOS has suspended "
-                   + "stops the whole app the next time it is needed. Turn this on "
-                   + "only to collect StikDebug's own logs.")
+                Text("مطفأ افتراضيًا. يفصل Husk عن StikDebug فور امتلاك منطقة "
+                   + "JIT، لأن مصححًا علّقه iOS يوقف التطبيق كله في المرة التالية "
+                   + "التي يُحتاج فيها. فعّله فقط لجمع سجلات StikDebug الخاصة.")
             }
 
             Section {
-                Text("APKs install from the Library's + button or from the Files tab. "
-                   + "Split sets — a base APK plus its config pieces — must be picked "
-                   + "together; installing the base alone fails on missing native "
-                   + "libraries.")
+                Text("تُثبَّت ملفات APK من زر + في المكتبة أو من تبويب الملفات. "
+                   + "الحزم المقسّمة — ملف أساسي مع قطع الإعداد — يجب اختيارها "
+                   + "معًا؛ تثبيت الأساسي وحده يفشل بسبب المكتبات الأصلية الناقصة.")
                     .font(.footnote).foregroundStyle(.secondary)
             } header: {
-                Text("Sideloading")
+                Text("التثبيت اليدوي")
             }
         }
         .huskForm()
-        .navigationTitle("JIT & sideload")
+        .navigationTitle("JIT والتثبيت اليدوي")
     }
 }
 
@@ -535,7 +526,7 @@ struct SavedMachineSettings: View {
     var body: some View {
         Form {
             Section {
-                Toggle("Save automatically", isOn: $autoSave)
+                Toggle("حفظ تلقائي", isOn: $autoSave)
                     .onChange(of: autoSave) { v in
                         UserDefaults.standard.set(v, forKey: "husk.autoSave")
                         HuskLog.log("ui", v ? "automatic saving on" : "automatic saving off")
@@ -543,20 +534,19 @@ struct SavedMachineSettings: View {
                 Button {
                     QemuRunner.shared.saveState(reason: "asked from settings")
                 } label: {
-                    Label(runner.isSavingState ? "Saving…" : "Save now",
+                    Label(runner.isSavingState ? "جارٍ الحفظ…" : "احفظ الآن",
                           systemImage: "externaldrive.badge.checkmark")
                 }
                 .disabled(runner.isSavingState)
             } footer: {
-                Text("Husk restores a saved machine instead of booting it, which takes "
-                   + "seconds rather than minutes. The picture freezes while it writes. "
-                   + "With this off, nothing saves by itself — including after an "
-                   + "install.")
+                Text("يستعيد Husk جهازًا محفوظًا بدل إقلاعه، فيستغرق ثوانٍ بدل "
+                   + "دقائق. تتجمد الصورة أثناء الكتابة. ومع إيقافه لا يُحفظ شيء "
+                   + "تلقائيًا — حتى بعد التثبيت.")
             }
 
             Section {
                 Button(role: .destructive) { askWhichToDelete = true } label: {
-                    Label("Delete saved machine", systemImage: "trash")
+                    Label("حذف الجهاز المحفوظ", systemImage: "trash")
                 }
                 .disabled(!QemuRunner.shared.hasSnapshot)
                 if let deleteResult {
@@ -564,40 +554,40 @@ struct SavedMachineSettings: View {
                 }
             } footer: {
                 Text(QemuRunner.shared.hasSnapshot
-                     ? "Currently saved: "
+                     ? "المحفوظ حاليًا: "
                      + ((QemuRunner.shared.snapshotDisplay ?? "sw").contains("gl")
-                        ? "GPU" : "software") + "."
-                     : "Nothing is saved, so Android boots from cold.")
+                        ? "GPU" : "البرمجيات") + "."
+                     : "لا شيء محفوظ، فيقلع أندرويد من الصفر.")
             }
 
             Section {
-                Toggle("Download pre-booted snapshot", isOn: $useSnapshot)
+                Toggle("تنزيل لقطة مُقلَعة مسبقًا", isOn: $useSnapshot)
                     .onChange(of: useSnapshot) { v in
                         UserDefaults.standard.set(v, forKey: "husk.downloadSnapshot")
                     }
             } footer: {
-                Text("Adds about 2 GB to the first download. It was captured on the "
-                   + "software renderer, so it is not used on GPU — which cold-boots "
-                   + "once and then saves its own.")
+                Text("يضيف حوالي 2 غيغابايت للتنزيل الأول. التُقطت على معالج "
+                   + "البرمجيات، فلا تُستخدم على GPU — الذي يقلع من الصفر مرة "
+                   + "ثم يحفظ لقطته.")
             }
         }
         .huskForm()
-        .navigationTitle("Saved machine")
-        .confirmationDialog("Which saved machine?", isPresented: $askWhichToDelete,
+        .navigationTitle("الجهاز المحفوظ")
+        .confirmationDialog("أي جهاز محفوظ؟", isPresented: $askWhichToDelete,
                             titleVisibility: .visible) {
-            Button("GPU machine", role: .destructive) { forget("gl", "GPU") }
-            Button("Software machine", role: .destructive) { forget("sw", "software") }
-            Button("Cancel", role: .cancel) { }
+            Button("جهاز GPU", role: .destructive) { forget("gl", "GPU") }
+            Button("جهاز البرمجيات", role: .destructive) { forget("sw", "البرمجيات") }
+            Button("إلغاء", role: .cancel) { }
         } message: {
-            Text("Android will boot from cold once, then save a new one.")
+            Text("سيقلع أندرويد من الصفر مرة واحدة، ثم يحفظ جهازًا جديدًا.")
         }
     }
 
     private func forget(_ mode: String, _ name: String) {
         if QemuRunner.shared.forgetSnapshot(mode: mode) {
-            deleteResult = "Deleted the \(name) machine. The next launch boots from cold."
+            deleteResult = "حُذف \(name) المحفوظ. الإقلاع التالي من الصفر."
         } else {
-            deleteResult = "No \(name) machine is saved, so nothing was deleted."
+            deleteResult = "لا يوجد \(name) محفوظ، فلم يُحذف شيء."
         }
     }
 }
@@ -616,22 +606,22 @@ struct AppearanceSettings: View {
             Theme.backdrop
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    Picker("Appearance", selection: $appearance) {
+                    Picker("المظهر", selection: $appearance) {
                         ForEach(Theme.Appearance.allCases) { Text($0.title).tag($0) }
                     }
                     .pickerStyle(.segmented)
                     .onChange(of: appearance) { v in
                         HuskLog.log("ui", "appearance: \(v.rawValue)")
                     }
-                    Text("System follows the phone. The guest's own screen stays dark "
-                       + "either way — it is a picture of another phone.")
+                    Text("النظام يتبع الهاتف. شاشة الضيف تبقى داكنة في الحالتين "
+                       + "— فهي صورة لهاتف آخر.")
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.textDim)
                         .padding(.horizontal, 4)
                 }
                 .padding(.horizontal, 18).padding(.top, 12)
 
-                SectionHeader(title: "App icon")
+                SectionHeader(title: "أيقونة التطبيق")
                     .padding(.horizontal, 22).padding(.top, 14)
 
                 LazyVGrid(columns: columns, spacing: 14) {
@@ -673,16 +663,16 @@ struct AppearanceSettings: View {
                 }
                 .padding(.horizontal, 18).padding(.top, 8)
 
-                Text("Automatic follows the system appearance — light, dark and "
-                   + "tinted. The others pin one look. iOS shows its own confirmation "
-                   + "after a change; that alert cannot be turned off.")
+                Text("التلقائي يتبع مظهر النظام — فاتح وداكن وملوّن. البقية تثبّت "
+                   + "مظهرًا واحدًا. يعرض iOS تأكيده الخاص بعد التغيير؛ ولا يمكن "
+                   + "إيقاف ذلك التنبيه.")
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.textDim)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 28).padding(.vertical, 18)
             }
         }
-        .navigationTitle("Appearance")
+        .navigationTitle("المظهر")
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -704,7 +694,7 @@ struct AboutSettings: View {
                         Text("Husk")
                             .font(.system(size: 22, weight: .semibold))
                             .foregroundStyle(Theme.text)
-                        Text("Version \(Bundle.main.version)")
+                        Text("الإصدار \(Bundle.main.version)")
                             .font(.system(size: 13))
                             .foregroundStyle(Theme.textDim)
                     }
@@ -712,12 +702,12 @@ struct AboutSettings: View {
 
                     RowGroup {
                         VStack(spacing: 12) {
-                            DetailRow(label: "Build", value: Bundle.main.commit)
-                            DetailRow(label: "Guest image", value: GuestImage.imageVersion)
-                            DetailRow(label: "Renderer",
+                            DetailRow(label: "البناء", value: Bundle.main.commit)
+                            DetailRow(label: "صورة الضيف", value: GuestImage.imageVersion)
+                            DetailRow(label: "المعالج الرسومي",
                                       value: runner.displayKind == .gl ? "GPU"
                                            : runner.displayKind == .software ? "CPU"
-                                           : "not started")
+                                           : "لم يبدأ")
                         }
                         .padding(14)
                     }
@@ -725,11 +715,11 @@ struct AboutSettings: View {
                     RowGroup {
                         Toggle(isOn: $devInfo) {
                             VStack(alignment: .leading, spacing: 3) {
-                                Text("Developer info")
+                                Text("معلومات المطوّر")
                                     .font(.system(size: 15, weight: .medium))
                                     .foregroundStyle(Theme.text)
-                                Text("Technical detail in the Android Translation Layer screens: "
-                                   + "library reports, device checks and run logs.")
+                                Text("تفاصيل تقنية في شاشات Android Translation Layer: "
+                                   + "تقارير المكتبات وفحوصات الجهاز وسجلات التشغيل.")
                                     .font(.system(size: 12))
                                     .foregroundStyle(Theme.textDim)
                             }
@@ -738,14 +728,14 @@ struct AboutSettings: View {
                     }
 
                     Button { showLogs = true } label: {
-                        Label("Open console", systemImage: "terminal")
+                        Label("فتح السجل", systemImage: "terminal")
                     }
                     .buttonStyle(PrimaryButtonStyle())
 
-                    Text("Husk runs unmodified Android APKs in a real Android system "
-                       + "on your iPhone. The console shows Husk's live log, the "
-                       + "guest's serial output and QEMU's own output — the three "
-                       + "files any problem here is diagnosed from.")
+                    Text("يشغّل Husk ملفات APK الأصلية دون تعديل في نظام أندرويد "
+                       + "حقيقي على آيفونك. يعرض السجل سجل Husk المباشر ومخرجات "
+                       + "الضيف التسلسلية ومخرجات QEMU — وهي الملفات الثلاثة التي "
+                       + "تُشخَّص منها أي مشكلة.")
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.textDim)
                         .multilineTextAlignment(.center)
@@ -754,7 +744,7 @@ struct AboutSettings: View {
                 .padding(.horizontal, 18).padding(.vertical, 14)
             }
         }
-        .navigationTitle("About")
+        .navigationTitle("حول")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showLogs) { LogView() }
     }

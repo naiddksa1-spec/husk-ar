@@ -16,21 +16,21 @@ struct DiscoverTab: View {
                 Theme.backdrop
 
                 if manager.isLoading && manager.sources.isEmpty {
-                    ProgressView("Fetching Repositories...")
+                    ProgressView("جارٍ جلب المستودعات…")
                         .foregroundStyle(Theme.textDim)
                 } else if manager.sources.isEmpty {
                     VStack(spacing: 16) {
                         Image(systemName: "tray.fill")
                             .font(.system(size: 48))
                             .foregroundStyle(Theme.textDim)
-                        Text("No Repositories")
+                        Text("لا مستودعات")
                             .font(.headline).foregroundStyle(Theme.text)
-                        Text("Add a source to start discovering apps.")
+                        Text("أضف مصدرًا لبدء اكتشاف التطبيقات.")
                             .foregroundStyle(Theme.textDim).multilineTextAlignment(.center)
                         Button {
                             showingAddSource = true
                         } label: {
-                            Label("Add Source", systemImage: "plus.circle.fill")
+                            Label("إضافة مصدر", systemImage: "plus.circle.fill")
                         }
                         .buttonStyle(.borderedProminent)
                     }
@@ -50,8 +50,8 @@ struct DiscoverTab: View {
                     }
                 }
             }
-            .navigationTitle("Discover")
-            .searchable(text: $searchText, prompt: "Search \(totalAppCount) apps...")
+            .navigationTitle("اكتشف")
+            .searchable(text: $searchText, prompt: "ابحث في \(totalAppCount) تطبيق…")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     HStack(spacing: 14) {
@@ -96,10 +96,10 @@ struct DiscoverTab: View {
                     Button { showingSources = true } label: {
                         HStack(spacing: 6) {
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(source?.name ?? (isLoading ? "Loading..." : "Failed"))
+                                Text(source?.name ?? (isLoading ? "جارٍ التحميل…" : "فشل"))
                                     .font(.subheadline.bold())
                                     .foregroundStyle(hasError ? .red : Theme.text)
-                                Text(isLoading ? "Fetching..." : "\(source?.apps.count ?? 0) apps")
+                                Text(isLoading ? "جارٍ الجلب…" : "\(source?.apps.count ?? 0) تطبيق")
                                     .font(.caption2)
                                     .foregroundStyle(Theme.textDim)
                             }
@@ -112,7 +112,7 @@ struct DiscoverTab: View {
                     .buttonStyle(.plain)
                 }
                 Button { showingAddSource = true } label: {
-                    Label("Add Source", systemImage: "plus")
+                    Label("إضافة مصدر", systemImage: "plus")
                         .font(.subheadline.bold())
                         .foregroundStyle(.blue)
                         .padding(.horizontal, 14).padding(.vertical, 10)
@@ -147,7 +147,7 @@ struct DiscoverTab: View {
             }
 
             if debouncedSearchText.isEmpty && apps.count > 50 {
-                Text("Search to see \(apps.count - 50) more apps...")
+                Text("ابحث لرؤية \(apps.count - 50) تطبيق آخر…")
                     .font(.footnote).foregroundStyle(Theme.textDim)
                     .frame(maxWidth: .infinity, alignment: .center).padding(.bottom, 4)
             }
@@ -183,7 +183,7 @@ struct DiscoverTab: View {
             let progress = manager.downloadProgress[app.bundleIdentifier]
 
             if isInstalled {
-                Button("OPEN") {
+                Button("فتح") {
                     let intent = "am start -n \(app.bundleIdentifier)/\(app.bundleIdentifier).MainActivity"
                     _ = try? GuestBridge.shared.shell(intent, timeout: 5)
                 }
@@ -200,7 +200,7 @@ struct DiscoverTab: View {
                     Image(systemName: "stop.fill").font(.system(size: 10)).foregroundStyle(Theme.textDim)
                 }
             } else {
-                Button("GET") { manager.downloadAndInstall(app: app) }
+                Button("تنزيل") { manager.downloadAndInstall(app: app) }
                     .font(.subheadline.bold())
                     .padding(.horizontal, 16).padding(.vertical, 8)
                     .background(Color.blue.opacity(0.2)).foregroundStyle(.blue)
@@ -215,17 +215,17 @@ struct DiscoverTab: View {
         NavigationStack {
             VStack(spacing: 24) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Source URL")
+                    Text("رابط المصدر")
                         .font(.headline).foregroundStyle(Theme.text)
                     TextField("https://f-droid.org/repo/index-v1.json", text: $newSourceURL)
                         .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                         .padding().background(Theme.surfaceHigh).cornerRadius(12)
-                    Text("Paste any F-Droid-compatible repository index URL.")
+                    Text("الصق رابط فهرس مستودع متوافق مع F-Droid.")
                         .font(.caption).foregroundStyle(Theme.textDim)
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Presets")
+                    Text("جاهزة")
                         .font(.headline).foregroundStyle(Theme.text)
                     ForEach([
                         ("F-Droid", "https://f-droid.org/repo/index-v1.json"),
@@ -253,13 +253,13 @@ struct DiscoverTab: View {
             }
             .padding()
             .background(Theme.backdrop.ignoresSafeArea())
-            .navigationTitle("Add Source")
+            .navigationTitle("إضافة مصدر")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") { newSourceURL = ""; showingAddSource = false }
+                    Button("إلغاء") { newSourceURL = ""; showingAddSource = false }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Add") {
+                    Button("إضافة") {
                         let url = newSourceURL
                         newSourceURL = ""
                         showingAddSource = false
@@ -278,12 +278,12 @@ struct DiscoverTab: View {
     private var sourcesSheet: some View {
         NavigationStack {
             List {
-                Section("Active Repositories") {
+                Section("المستودعات النشطة") {
                     ForEach(manager.sourceURLs, id: \.self) { url in
                         VStack(alignment: .leading, spacing: 2) {
                             if let source = manager.sources.first(where: { $0.identifier == url }) {
                                 Text(source.name).font(.subheadline.bold()).foregroundStyle(Theme.text)
-                                Text("\(source.apps.count) apps").font(.caption).foregroundStyle(Theme.textDim)
+                                Text("\(source.apps.count) تطبيق").font(.caption).foregroundStyle(Theme.textDim)
                             }
                             Text(url).font(.caption2).foregroundStyle(Theme.textDim).lineLimit(1)
                         }
@@ -292,10 +292,10 @@ struct DiscoverTab: View {
                     .onDelete { manager.sourceURLs.remove(atOffsets: $0) }
                 }
             }
-            .navigationTitle("Repositories")
+            .navigationTitle("المستودعات")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Done") { showingSources = false }
+                    Button("تم") { showingSources = false }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { showingSources = false; showingAddSource = true } label: {

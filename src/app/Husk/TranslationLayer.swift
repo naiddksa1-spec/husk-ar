@@ -73,11 +73,11 @@ extension TLReport {
         guard runsOnNativeRuntime else { return summary }
         let flagged = libraries.filter { $0.abi == "arm64-v8a" && $0.status != "ok" }.count
         let total = libraries.filter { $0.abi == "arm64-v8a" }.count
-        var text = "A \(nativeEngineName) game. It runs through Husk's native runtime, which loads its \(total) arm64 libraries itself."
-        if nativeEngine == .cocos || nativeEngine == .minecraft { text += " It is a landscape game: Husk turns the screen for it." }
+        var text = "لعبة \(nativeEngineName). تعمل عبر بيئة التشغيل الأصلية في Husk، التي تحمّل مكتباتها الـ \(total) من نوع arm64 بنفسها."
+        if nativeEngine == .cocos || nativeEngine == .minecraft { text += " إنها لعبة أفقية: Husk يدير الشاشة لأجلها." }
         if flagged > 0 {
-            text += " \(flagged) of them use tricks the older loader could not handle; the native runtime handles those too, "
-                  + "except for optional anti-tamper code, which it leaves out."
+            text += " \(flagged) منها تستخدم حيلًا لم يستطع المحمّل القديم التعامل معها؛ بيئة التشغيل الأصلية تتعامل معها أيضًا، "
+                  + "باستثناء كود الحماية من العبث الاختياري، الذي تتجاوزه."
         }
         return text
     }
@@ -161,8 +161,8 @@ final class TranslationLayerStore: ObservableObject {
     /// picked together -- and report on it.
     func add(_ urls: [URL], move: Bool = false) {
         guard !urls.isEmpty, busy == nil else { return }
-        busy = urls.count == 1 ? "Adding \(urls[0].lastPathComponent)…"
-                               : "Adding \(urls.count) APKs…"
+        busy = urls.count == 1 ? "جارٍ إضافة \(urls[0].lastPathComponent)…"
+                               : "جارٍ إضافة \(urls.count) ملفات APK…"
         Task.detached(priority: .userInitiated) {
             let failure = Self.ingest(urls, move: move)
             await MainActor.run {
@@ -264,7 +264,7 @@ final class TranslationLayerStore: ObservableObject {
         } catch {
             try? fm.removeItem(at: dir)
             HuskLog.log("tl", "FAILED to add: \(error.localizedDescription)")
-            return "Husk could not copy it: \(error.localizedDescription)"
+            return "تعذّر على Husk نسخه: \(error.localizedDescription)"
         }
 
         let apks = ((try? fm.contentsOfDirectory(atPath: dir.path)) ?? [])
@@ -362,18 +362,18 @@ struct TranslationLayerSettings: View {
                         HuskLog.log("ui", v ? "translation layer on" : "translation layer off")
                     }
             } header: {
-                Text("Experimental")
+                Text("تجريبي")
             } footer: {
                 if !devInfo {
-                    Text("Runs some Android apps, such as Unity and cocos2d-x games, straight on your iPhone without starting "
-                       + "Android. Experimental, and it needs JIT turned on.")
+                    Text("يشغّل بعض تطبيقات أندرويد، مثل ألعاب Unity و cocos2d-x، مباشرة على آيفونك دون تشغيل "
+                       + "أندرويد. تجريبي، ويحتاج تفعيل JIT.")
                 } else {
-                Text("Runs an app's own code directly, against a rewrite of Android's "
-                   + "framework, instead of booting a whole Android system -- the "
-                   + "approach of Android Translation Layer on Linux, rebuilt for iOS. "
-                   + "It can run Unity and cocos2d-x games (experimental) and reports what other apps "
-                   + "would need, and checks this iPhone for what the design depends on. "
-                   + "Android itself is unaffected either way.")
+                Text("يشغّل كود التطبيق نفسه مباشرة، مقابل إعادة كتابة لإطار "
+                   + "عمل أندرويد، بدلًا من إقلاع نظام أندرويد كامل — نفس "
+                   + "نهج Android Translation Layer على لينكس، أُعيد بناؤه لـ iOS. "
+                   + "يستطيع تشغيل ألعاب Unity و cocos2d-x (تجريبي) ويُبلغ عما تحتاجه التطبيقات الأخرى، "
+                   + "ويفحص هذا الآيفون للتحقق مما يعتمد عليه التصميم. "
+                   + "أندرويد نفسه لا يتأثر في الحالتين.")
                 }
             }
 
@@ -393,10 +393,10 @@ struct TranslationLayerSettings: View {
             store.add(urls)
         }
         .onAppear { store.adoptDroppedAPKs() }
-        .alert("Could not add the app", isPresented: Binding(
+        .alert("تعذّرت إضافة التطبيق", isPresented: Binding(
                 get: { store.lastError != nil },
                 set: { if !$0 { store.lastError = nil } })) {
-            Button("OK", role: .cancel) { store.lastError = nil }
+            Button("حسنًا", role: .cancel) { store.lastError = nil }
         } message: {
             Text(store.lastError ?? "")
         }
@@ -420,14 +420,14 @@ struct TranslationLayerSettings: View {
             Button {
                 importing = true
             } label: {
-                Label("Add APK", systemImage: "plus")
+                Label("إضافة APK", systemImage: "plus")
             }
             .disabled(store.busy != nil)
         } header: {
-            Text("Apps")
+            Text("التطبيقات")
         } footer: {
-            Text("Husk keeps its own copy, apart from Android's. Pick a base APK and "
-               + "its split pieces together to add them as one app.")
+            Text("يحتفظ Husk بنسخته الخاصة، منفصلة عن نسخة أندرويد. اختر ملف APK الأساسي "
+               + "وقطعه المنقسمة معًا لإضافتها كتطبيق واحد.")
         }
     }
 
@@ -450,32 +450,32 @@ struct TranslationLayerSettings: View {
             Button {
                 store.runChecks()
             } label: {
-                Label(store.checking ? "Checking…"
-                      : store.checks.isEmpty ? "Run checks" : "Run again",
+                Label(store.checking ? "جارٍ الفحص…"
+                      : store.checks.isEmpty ? "تشغيل الفحوصات" : "إعادة التشغيل",
                       systemImage: "stethoscope")
             }
             .disabled(store.checking)
         } header: {
-            Text("This iPhone")
+            Text("هذا الآيفون")
         } footer: {
-            Text("Android's native code expects things of the processor and of memory "
-               + "that only the phone can answer -- above all, whether a library's code "
-               + "can run with its data writable right beside it. Enable JIT first, or "
-               + "the memory checks are skipped. The results go to the console too.")
+            Text("الكود الأصلي لأندرويد يتوقع أمورًا من المعالج والذاكرة "
+               + "لا يجيب عنها إلا الهاتف — وأهمها: هل يمكن لكود مكتبة "
+               + "أن يعمل وبياناته قابلة للكتابة بجانبه مباشرة. فعّل JIT أولًا، وإلا "
+               + "تُتخطّى فحوصات الذاكرة. النتائج تذهب إلى سجل النظام أيضًا.")
         }
     }
 
     private var progressSection: some View {
         Section {
-            DetailRow(label: "App reports", value: "working", mono: false)
-            DetailRow(label: "Device checks", value: "working", mono: false)
-            DetailRow(label: "Library loader", value: "working", mono: false)
-            DetailRow(label: "Android runtime", value: "Unity, cocos2d-x games", mono: false)
-            DetailRow(label: "Opening apps", value: "Unity, cocos2d-x games (experimental)", mono: false)
+            DetailRow(label: "تقارير التطبيقات", value: "يعمل", mono: false)
+            DetailRow(label: "فحوصات الجهاز", value: "يعمل", mono: false)
+            DetailRow(label: "محمّل المكتبات", value: "يعمل", mono: false)
+            DetailRow(label: "بيئة تشغيل أندرويد", value: "ألعاب Unity و cocos2d-x", mono: false)
+            DetailRow(label: "فتح التطبيقات", value: "ألعاب Unity و cocos2d-x (تجريبي)", mono: false)
         } header: {
-            Text("Where it stands")
+            Text("أين وصلنا")
         } footer: {
-            Text("The plan, in order, is docs/04-translation-layer.md in Husk's source.")
+            Text("الخطة بالترتيب موجودة في docs/04-translation-layer.md ضمن سورس Husk.")
         }
     }
 }
@@ -487,16 +487,16 @@ struct TLVerdict {
 
     init(_ report: TLReport?) {
         if report?.runsOnNativeRuntime == true {
-            title = "\(report!.nativeEngineName): native runtime"; tint = Theme.good
+            title = "\(report!.nativeEngineName): التشغيل الأصلي"; tint = Theme.good
             return
         }
         switch report?.verdict {
-        case "java"?:           title = "Java only";                    tint = Theme.good
-        case "native"?:         title = "Native code, maps cleanly";    tint = Theme.good
-        case "nativeWithWork"?: title = "Native code, needs work";      tint = .orange
-        case "noArm64"?:        title = "No arm64 code";                tint = .red
-        case "unreadable"?:     title = "Could not be read";            tint = .red
-        default:                title = "Not scanned";                  tint = Theme.textDim
+        case "java"?:           title = "جافا فقط";                  tint = Theme.good
+        case "native"?:         title = "كود أصلي، يُحمّل بسلاسة";   tint = Theme.good
+        case "nativeWithWork"?: title = "كود أصلي، يحتاج عملًا";     tint = .orange
+        case "noArm64"?:        title = "لا يوجد كود arm64";          tint = .red
+        case "unreadable"?:     title = "تعذّرت قراءته";              tint = .red
+        default:                title = "لم يُفحص";                   tint = Theme.textDim
         }
     }
 }
@@ -507,8 +507,8 @@ struct TLPlainStatus {
     let tint: Color
 
     init(_ report: TLReport?) {
-        if report?.runsOnNativeRuntime == true { title = "Ready to run"; tint = Theme.good }
-        else { title = "Experimental"; tint = Theme.textDim }
+        if report?.runsOnNativeRuntime == true { title = "جاهز للتشغيل"; tint = Theme.good }
+        else { title = "تجريبي"; tint = Theme.textDim }
     }
 }
 
@@ -537,11 +537,11 @@ private struct TLCheckTag: View {
 
     var body: some View {
         switch status {
-        case "pass":    Tag(text: "Pass", tint: Theme.good)
-        case "fail":    Tag(text: "Fail", tint: .red)
-        case "warn":    Tag(text: "Partly", tint: .orange)
-        case "skip":    Tag(text: "Skipped")
-        default:        Tag(text: "Info", tint: Theme.accent)
+        case "pass":    Tag(text: "ناجح", tint: Theme.good)
+        case "fail":    Tag(text: "فاشل", tint: .red)
+        case "warn":    Tag(text: "جزئيًا", tint: .orange)
+        case "skip":    Tag(text: "متخطّى")
+        default:        Tag(text: "معلومة", tint: Theme.accent)
         }
     }
 }
@@ -587,7 +587,7 @@ struct TLAppReportView: View {
                     showAttempt = true
                 } label: {
                     HStack {
-                        Label("Run Translation Layer Attempt", systemImage: "play.circle.fill")
+                        Label("تجربة تشغيل (Translation Layer)", systemImage: "play.circle.fill")
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(Theme.accent)
                         Spacer()
@@ -598,24 +598,24 @@ struct TLAppReportView: View {
                 }
             } footer: {
                 if devInfo {
-                    Text("Loads arm64 native code into JIT memory on Apple Silicon and drives "
-                       + "a NativeActivity lifecycle. Apps with Java/Dex require ART (milestone 2).")
+                    Text("يحمّل الكود الأصلي arm64 في ذاكرة JIT على Apple Silicon ويقود "
+                       + "دورة حياة NativeActivity. التطبيقات ذات Java/Dex تتطلب ART (المرحلة 2).")
                 } else {
-                    Text("Turn on JIT first. Close the game with Close at the top.")
+                    Text("فعّل JIT أولًا. أغلق اللعبة بزر «إغلاق» في الأعلى.")
                 }
             }
 
             if devInfo, let report = app.report {
                 Section {
                     if let engine = report.engine {
-                        DetailRow(label: "Made with", value: engine, mono: false)
+                        DetailRow(label: "صُنع بـ", value: engine, mono: false)
                     }
                     DetailRow(label: "Dex", value: dex(report), mono: false)
                     DetailRow(label: "ABIs", value: report.abis.isEmpty
-                              ? "none" : report.abis.joined(separator: ", "))
-                    DetailRow(label: "APKs", value: "\(app.apks.count)", mono: false)
+                              ? "لا يوجد" : report.abis.joined(separator: ", "))
+                    DetailRow(label: "ملفات APK", value: "\(app.apks.count)", mono: false)
                 } header: {
-                    Text("What it is")
+                    Text("ما هو")
                 }
 
                 if !report.systemLibraries.isEmpty {
@@ -625,11 +625,9 @@ struct TLAppReportView: View {
                             .foregroundStyle(Theme.text)
                             .textSelection(.enabled)
                     } header: {
-                        Text("Android libraries it needs")
+                        Text("مكتبات أندرويد التي يحتاجها")
                     } footer: {
-                        Text("Its own libraries link against these, and it does not "
-                           + "carry them. Each is something the translation layer has "
-                           + "to provide.")
+                        Text("مكتباته الخاصة ترتبط بهذه، وهو لا يحملها معه. كل واحدة منها شيء يجب أن توفره طبقة الترجمة.")
                     }
                 }
 
@@ -644,22 +642,21 @@ struct TLAppReportView: View {
 
             Section {
                 Button(role: .destructive) { confirmRemove = true } label: {
-                    Label("Remove", systemImage: "trash")
+                    Label("إزالة", systemImage: "trash")
                 }
             } footer: {
-                Text("Deletes Husk's copy of the APKs. Anything installed in Android is "
-                   + "untouched.")
+                Text("يحذف نسخة Husk من ملفات APK. أي شيء مثبت في أندرويد لا يُمس.")
             }
         }
         .huskForm()
         .navigationTitle(app.label)
-        .confirmationDialog("Remove \(app.label)?", isPresented: $confirmRemove,
+        .confirmationDialog("إزالة \(app.label)؟", isPresented: $confirmRemove,
                             titleVisibility: .visible) {
-            Button("Remove", role: .destructive) {
+            Button("إزالة", role: .destructive) {
                 store.remove(app)
                 dismiss()
             }
-            Button("Cancel", role: .cancel) { }
+            Button("إلغاء", role: .cancel) { }
         }
         // A native-runtime game is swiped, and a sheet takes a swipe down for itself: it goes full screen.
         .sheet(isPresented: Binding(get: { showAttempt && app.report?.runsOnNativeRuntime != true },
@@ -673,7 +670,7 @@ struct TLAppReportView: View {
     }
 
     private func dex(_ report: TLReport) -> String {
-        let files = report.dexCount == 1 ? "1 file" : "\(report.dexCount) files"
+        let files = report.dexCount == 1 ? "ملف واحد" : "\(report.dexCount) ملفات"
         let size = ByteCountFormatter.string(fromByteCount: report.dexBytes, countStyle: .file)
         return "\(files), \(size)"
     }
@@ -684,9 +681,9 @@ private struct TLLibraryRows: View {
 
     private var statusTitle: String {
         switch lib.status {
-        case "ok":      return "Maps as it is"
-        case "work":    return "Needs loader work"
-        default:        return "Cannot load"
+        case "ok":      return "يُحمّل كما هو"
+        case "work":    return "يحتاج عملًا في المحمّل"
+        default:        return "تعذّر تحميله"
         }
     }
 
@@ -717,22 +714,22 @@ private struct TLLibraryRows: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         if let layout = lib.layout {
-            DetailRow(label: "16 KiB pages", value: layout)
+            DetailRow(label: "صفحات 16 KiB", value: layout)
         }
         if let relocations = lib.relocations {
-            DetailRow(label: "Relocations", value: relocationText(relocations))
+            DetailRow(label: "إعادة التموضع", value: relocationText(relocations))
         }
         if let imports = lib.imports {
-            DetailRow(label: "Imported symbols", value: "\(imports)")
+            DetailRow(label: "الرموز المستوردة", value: "\(imports)")
         }
         if let svc = lib.svc, svc > 0 {
-            DetailRow(label: "System calls", value: "\(svc)")
+            DetailRow(label: "استدعاءات النظام", value: "\(svc)")
         }
         if let reads = lib.tpidrReads {
-            DetailRow(label: "Thread register reads", value: "\(reads)")
+            DetailRow(label: "قراءات سجل الخيط", value: "\(reads)")
         }
         if lib.tls == true {
-            DetailRow(label: "Thread-local storage", value: "yes", mono: false)
+            DetailRow(label: "التخزين المحلي للخيط", value: "نعم", mono: false)
         }
     }
 }
@@ -750,12 +747,12 @@ final class TLAttemptRunner: ObservableObject {
     private var timer: Timer?
 
     var statusText: String {
-        if isRunning { return "Running Attempt..." }
-        guard let code = exitCode else { return "Ready" }
+        if isRunning { return "جارٍ تنفيذ المحاولة…" }
+        guard let code = exitCode else { return "جاهز" }
         switch code {
-        case 2:  return "Success: The guest drew frames!"
-        case 1:  return "Loaded: Native libraries loaded (no draw)"
-        default: return "Refused: Could not execute"
+        case 2:  return "نجاح: رسم الضيف إطارات!"
+        case 1:  return "تم التحميل: حُمّلت المكتبات الأصلية (بدون رسم)"
+        default: return "مرفوض: تعذّر التنفيذ"
         }
     }
 
@@ -771,12 +768,12 @@ final class TLAttemptRunner: ObservableObject {
 
     var subStatusText: String {
         if isRunning {
-            return "\(frameCount) frame(s) posted · driving lifecycle"
+            return "\(frameCount) إطار مرسَل · جارٍ قيادة دورة الحياة"
         }
         if let code = exitCode {
-            return "Exit code \(code) · \(frameCount) frame(s) drawn"
+            return "رمز الخروج \(code) · \(frameCount) إطار مرسوم"
         }
-        return "Not started"
+        return "لم يبدأ بعد"
     }
 
     private var pollTicks: Int = 0
@@ -896,13 +893,13 @@ struct TLClassicAttemptView: View {
                     }
                     Spacer()
                     if runner.isRunning {
-                        Button("Stop") {
+                        Button("إيقاف") {
                             runner.stop()
                         }
                         .buttonStyle(.bordered)
                         .tint(.red)
                     } else {
-                        Button("Rerun") {
+                        Button("إعادة التشغيل") {
                             runner.start(apks: app.apks)
                         }
                         .buttonStyle(.borderedProminent)
@@ -933,7 +930,7 @@ struct TLClassicAttemptView: View {
                             Image(systemName: showLog ? "chevron.down" : "chevron.right")
                                 .font(.system(size: 11, weight: .bold))
                                 .frame(width: 12)
-                            Text("ATTEMPT LOG")
+                            Text("سجلّ المحاولة")
                                 .font(.technical(11, weight: .bold))
                         }
                         .foregroundStyle(Theme.textDim)
@@ -944,11 +941,11 @@ struct TLClassicAttemptView: View {
                         Button {
                             UIPasteboard.general.string = runner.logText
                         } label: {
-                            Label("Copy", systemImage: "doc.on.doc")
+                            Label("نسخ", systemImage: "doc.on.doc")
                                 .font(.system(size: 12))
                         }
                     } else {
-                        Text("tap to show")
+                        Text("انقر للعرض")
                             .font(.system(size: 11))
                             .foregroundStyle(Theme.textDim.opacity(0.7))
                     }
@@ -965,7 +962,7 @@ struct TLClassicAttemptView: View {
                 if showLog {
                     ScrollViewReader { proxy in
                         ScrollView {
-                            Text(runner.logText.isEmpty ? "Starting attempt..." : runner.logText)
+                            Text(runner.logText.isEmpty ? "جارٍ بدء المحاولة…" : runner.logText)
                                 .font(.technical(11))
                                 .foregroundStyle(Theme.text)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -985,7 +982,7 @@ struct TLClassicAttemptView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") {
+                    Button("إغلاق") {
                         runner.stop()
                         dismiss()
                     }

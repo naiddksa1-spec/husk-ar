@@ -72,7 +72,7 @@ struct OnboardingView: View {
                             onDone()
                         }
                     } label: {
-                        Text(page < pages - 1 ? "Continue" : "Start using Husk")
+                        Text(page < pages - 1 ? "متابعة" : "ابدأ استخدام Husk")
                     }
                     .buttonStyle(PrimaryButtonStyle())
                     .padding(.horizontal, 28)
@@ -106,10 +106,10 @@ struct OnboardingView: View {
                     .shadow(color: Theme.accent.opacity(0.35), radius: 22, y: 10)
             }
             Text("Husk").font(.system(size: 40, weight: .semibold, design: .rounded))
-            Text("Android apps, on your iPhone.")
+            Text("تطبيقات أندرويد، على آيفونك.")
                 .font(.title3).foregroundStyle(.secondary)
-            Text("Husk runs a real Android system and opens APKs inside it. "
-               + "A few questions first — all of them can be changed later in Settings.")
+            Text("يشغّل Husk نظام أندرويد حقيقيًا ويفتح ملفات APK داخله. "
+               + "بضع أسئلة أولًا — ويمكنك تغيير إجاباتها لاحقًا من الإعدادات.")
                 .font(.callout).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 34).padding(.top, 4)
@@ -120,28 +120,28 @@ struct OnboardingView: View {
     private var choices: some View {
         ScrollView {
             VStack(spacing: 14) {
-                Text("How should Husk behave?")
+                Text("كيف تريد أن يعمل Husk؟")
                     .font(.title2.weight(.semibold))
                     .padding(.top, 34).padding(.bottom, 6)
 
-                choice(icon: "bolt.fill", title: "Start Android on launch",
-                       detail: "Boots the guest as soon as Husk opens, once JIT is "
-                             + "available. Off means you start it yourself.",
+                choice(icon: "bolt.fill", title: "تشغيل أندرويد عند الفتح",
+                       detail: "يُقلع نظام الضيف فور فتح Husk، عندما يكون JIT "
+                             + "متاحًا. إيقافه يعني أنك تشغّله بنفسك.",
                        isOn: $autoStart)
 
-                choice(icon: "rectangle.landscape.rotate", title: "Landscape screen",
-                       detail: "Gives Android a landscape screen, which games fill "
-                             + "properly. Portrait apps get letterboxed instead.",
+                choice(icon: "rectangle.landscape.rotate", title: "شاشة أفقية",
+                       detail: "يمنح أندرويد شاشة أفقية تملؤها الألعاب "
+                             + "جيدًا، وتظهر تطبيقات الوضع العمودي داخل إطار.",
                        isOn: $landscape)
 
-                choice(icon: "speaker.wave.2.fill", title: "Sound",
-                       detail: "Adds a sound device. Android cannot be saved while "
-                             + "this is on, so every launch boots from cold.",
+                choice(icon: "speaker.wave.2.fill", title: "الصوت",
+                       detail: "يضيف جهاز صوت. لا يمكن حفظ أندرويد أثناء "
+                             + "تفعيله، لذا يبدأ كل تشغيل من الصفر.",
                        isOn: $sound)
 
-                choice(icon: "externaldrive.badge.checkmark", title: "Save automatically",
-                       detail: "Saves the machine once Android settles, so later "
-                             + "launches restore in seconds instead of booting.",
+                choice(icon: "externaldrive.badge.checkmark", title: "الحفظ التلقائي",
+                       detail: "يحفظ الجهاز بعد استقرار أندرويد، فتستعيده "
+                             + "التشغيلات التالية خلال ثوانٍ بدل الإقلاع من جديد.",
                        isOn: $autoSave)
             }
             .padding(.horizontal, 20).padding(.bottom, 20)
@@ -175,10 +175,10 @@ struct OnboardingView: View {
             Image(systemName: "checkmark.seal.fill")
                 .font(.system(size: 62))
                 .foregroundStyle(Theme.accent)
-            Text("Ready").font(.largeTitle.weight(.semibold))
-            Text("Husk needs JIT to run Android, which on iOS only a debugger can "
-               + "grant. If it is not enabled, the Library will say so and offer "
-               + "to open StikDebug.")
+            Text("جاهز").font(.largeTitle.weight(.semibold))
+            Text("يحتاج Husk إلى JIT لتشغيل أندرويد، ولا يمنحه في iOS إلا أداة "
+               + "تصحيح الأخطاء. إن لم يكن مفعّلًا، ستخبرك المكتبة بذلك وتعرض "
+               + "عليك فتح StikDebug.")
                 .font(.callout).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 34)

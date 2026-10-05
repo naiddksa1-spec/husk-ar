@@ -29,18 +29,18 @@ struct BootScreen: View {
     /// looking at the screen, and the jokes should not repeat before the
     /// information does.
     private static let phrases = [
-        "Prepare for awesomeness",
-        "Waking Android up",
-        "Teaching an iPhone to speak Android",
-        "This is a whole operating system — be patient",
-        "App by Levi",
-        "Star the repo if you like this sort of thing",
-        "Translating arm64, one block at a time",
-        "No, it has not frozen",
-        "Unpacking the guest",
-        "Almost worth the wait",
-        "Negotiating with the JIT",
-        "Nearly there",
+        "استعد للروعة",
+        "نوقظ أندرويد",
+        "نعلّم الآيفون لغة أندرويد",
+        "هذا نظام تشغيل كامل — اصبر علينا شوي",
+        "تطبيق من Levi",
+        "ادعمنا بنجمة على المستودع إن أعجبتك الفكرة",
+        "نترجم arm64 كتلةً بكتلة",
+        "لا، لم يتجمّد",
+        "نجهّز نظام الضيف",
+        "يستحق الانتظار تقريبًا",
+        "نتفاوض مع JIT",
+        "قربنا نوصل",
     ]
 
     var body: some View {
@@ -93,7 +93,7 @@ struct BootScreen: View {
                 // An escape hatch, but not an invitation: it turns up only once
                 // waiting has stopped being novel.
                 if now.timeIntervalSince(began) > 8 {
-                    Button("Use Husk while it starts", action: onSkip)
+                    Button("استخدم Husk أثناء الإقلاع", action: onSkip)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(Theme.textDim)
                         .padding(.top, 14)
@@ -123,7 +123,7 @@ struct BootScreen: View {
             .frame(height: 5)
 
             HStack {
-                Text(shown > 0 ? "\(shown)%" : "starting")
+                Text(shown > 0 ? "\(shown)%" : "جارٍ البدء")
                     .font(.technical(12, weight: .medium))
                     .foregroundStyle(Theme.accent)
                 Spacer()
@@ -164,8 +164,8 @@ struct BootScreen: View {
         // for ten minutes, so show elapsed time instead.
         if done >= 58, !QemuRunner.didRestore {
             let mins = Int(now.timeIntervalSince(QemuRunner.bootStarted) / 60)
-            return mins < 1 ? "first boot takes 5–15 min"
-                            : "\(mins) min · first boot takes 5–15 min"
+            return mins < 1 ? "أول إقلاع يستغرق 5–15 دقيقة"
+                            : "\(mins) د · أول إقلاع يستغرق 5–15 دقيقة"
         }
         guard done >= 8, done <= 92 else { return nil }
         let elapsed = now.timeIntervalSince(began)
@@ -175,8 +175,8 @@ struct BootScreen: View {
         guard left > 2, left < 15 * 60 else { return nil }
         if left < 90 {
             let rounded = Int((left / 5).rounded()) * 5
-            return "about \(max(rounded, 5)) seconds remaining"
+            return "بقي نحو \(max(rounded, 5)) ثوانٍ"
         }
-        return "about \(Int((left / 60).rounded())) minutes remaining"
+        return "بقي نحو \(Int((left / 60).rounded())) دقائق"
     }
 }

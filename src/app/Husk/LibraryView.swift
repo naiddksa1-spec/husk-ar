@@ -29,13 +29,13 @@ struct LibraryView: View {
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button { importing = true } label: { Image(systemName: "plus") }
-                        .accessibilityLabel("Add APK")
+                        .accessibilityLabel("إضافة APK")
                 }
                 ToolbarItem(placement: .topBarLeading) {
                     Button { showLogs = true } label: {
                         Image(systemName: "doc.text.magnifyingglass")
                     }
-                    .accessibilityLabel("View logs")
+                    .accessibilityLabel("عرض السجلات")
                 }
             }
         }
@@ -79,7 +79,7 @@ struct LibraryView: View {
                     ForEach(Array(bridge.pendingInstalls), id: \.self) { name in
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
-                            Text("Installing \(name)…").font(.caption)
+                            Text("جارٍ تثبيت \(name)…").font(.caption)
                         }
                     }
                 }
@@ -113,12 +113,12 @@ struct LibraryView: View {
         VStack(spacing: 16) {
             Image(systemName: "square.grid.2x2")
                 .font(.system(size: 46)).foregroundStyle(.tertiary)
-            Text("No apps yet").font(.headline)
-            Text("Add an APK and it will be installed into the Android runtime, then appear here with its own icon.")
+            Text("لا تطبيقات بعد").font(.headline)
+            Text("أضف ملف APK وسيُثبَّت في بيئة أندرويد، ثم يظهر هنا بأيقونته.")
                 .font(.callout).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center).padding(.horizontal, 44)
             Button { importing = true } label: {
-                Label("Add APK", systemImage: "plus")
+                Label("إضافة APK", systemImage: "plus")
             }
             .buttonStyle(.borderedProminent)
             if let msg = bridge.lastAgentMessage {

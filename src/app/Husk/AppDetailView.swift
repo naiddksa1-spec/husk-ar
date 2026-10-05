@@ -54,16 +54,16 @@ struct AppDetailView: View {
             }
         }
         .navigationBarHidden(true)
-        .confirmationDialog("Uninstall \(live.label)?", isPresented: $confirmUninstall,
+        .confirmationDialog("إلغاء تثبيت \(live.label)؟", isPresented: $confirmUninstall,
                             titleVisibility: .visible) {
-            Button("Uninstall", role: .destructive) {
+            Button("إلغاء التثبيت", role: .destructive) {
                 host.uninstall(app.name)
                 dismiss()
             }
-            Button("Cancel", role: .cancel) { }
+            Button("إلغاء", role: .cancel) { }
         } message: {
-            Text("Its data goes with it. Save Android afterwards or the change is "
-               + "lost on the next launch.")
+            Text("ستُحذف بياناته معه. احفظ أندرويد بعد ذلك، وإلا ضاع "
+               + "التغيير عند التشغيل التالي.")
         }
     }
 
@@ -73,14 +73,14 @@ struct AppDetailView: View {
         Menu {
             Button {
                 UIPasteboard.general.string = app.name
-            } label: { Label("Copy package name", systemImage: "doc.on.doc") }
+            } label: { Label("نسخ اسم الحزمة", systemImage: "doc.on.doc") }
             Button { appInfo() } label: {
-                Label("Show in Android settings", systemImage: "gearshape")
+                Label("العرض في إعدادات أندرويد", systemImage: "gearshape")
             }
             .disabled(!canOpen)
             Divider()
             Button(role: .destructive) { confirmUninstall = true } label: {
-                Label("Uninstall", systemImage: "trash")
+                Label("إلغاء التثبيت", systemImage: "trash")
             }
             .disabled(!canOpen)
         } label: {
@@ -119,14 +119,14 @@ struct AppDetailView: View {
             Button {
                 host.launch(app.name) { onOpenGuest() }
             } label: {
-                Label(canOpen ? "Launch" : "Starting Android…",
+                Label(canOpen ? "تشغيل" : "جارٍ بدء أندرويد…",
                       systemImage: canOpen ? "play.fill" : "hourglass")
             }
             .buttonStyle(PrimaryButtonStyle(enabled: canOpen))
             .disabled(!canOpen)
 
             if !host.isReady {
-                Text("It opens as soon as Android answers.")
+                Text("سيُفتح فور استجابة أندرويد.")
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.textDim)
             }
@@ -135,11 +135,11 @@ struct AppDetailView: View {
 
     private var facts: some View {
         RowGroup {
-            fact("Version", live.version ?? "—")
+            fact("الإصدار", live.version ?? "—")
             RowDivider().padding(.leading, 14)
-            fact("Size", live.sizeBytes.map(Self.bytes) ?? "—")
+            fact("الحجم", live.sizeBytes.map(Self.bytes) ?? "—")
             RowDivider().padding(.leading, 14)
-            fact("Last used", live.lastUsed.map(Self.when) ?? "Never from Husk")
+            fact("آخر استخدام", live.lastUsed.map(Self.when) ?? "لم يُفتح من Husk بعد")
         }
     }
 
@@ -159,18 +159,18 @@ struct AppDetailView: View {
     private var actions: some View {
         RowGroup {
             Button { router.openFiles(at: "/sdcard/Android/data/\(app.name)") } label: {
-                HuskRow(systemImage: "folder", title: "Open in Files")
+                HuskRow(systemImage: "folder", title: "فتح في الملفات")
             }
             .buttonStyle(.plain)
             RowDivider()
             Button { appInfo() } label: {
-                HuskRow(systemImage: "info.circle", title: "App info")
+                HuskRow(systemImage: "info.circle", title: "معلومات التطبيق")
             }
             .buttonStyle(.plain)
             .disabled(!canOpen)
             RowDivider()
             Button { confirmUninstall = true } label: {
-                HuskRow(systemImage: "trash", title: "Uninstall", tint: .red,
+                HuskRow(systemImage: "trash", title: "إلغاء التثبيت", tint: .red,
                         showsChevron: false)
             }
             .buttonStyle(.plain)
@@ -199,9 +199,9 @@ struct AppDetailView: View {
     static func when(_ date: Date) -> String {
         let f = DateFormatter()
         if Calendar.current.isDateInToday(date) {
-            f.dateFormat = "'Today,' h:mm a"
+            f.dateFormat = "'اليوم،' h:mm a"
         } else if Calendar.current.isDateInYesterday(date) {
-            f.dateFormat = "'Yesterday,' h:mm a"
+            f.dateFormat = "'أمس،' h:mm a"
         } else {
             f.dateStyle = .medium
             f.timeStyle = .none

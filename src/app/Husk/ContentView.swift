@@ -40,21 +40,21 @@ struct ContentView: View {
             // why it appears instantly rather than reloading.
             TabView(selection: $router.tab) {
                 DiscoverTab()
-                    .tabItem { Label("Discover", systemImage: "sparkle.magnifyingglass") }
+                    .tabItem { Label("اكتشف", systemImage: "sparkle.magnifyingglass") }
                     .tag(HuskTab.discover)
 
                 LibraryTab(onOpenGuest: { showGuestScreen = true },
                            onStartAndroid: startFromLibrary,
                            started: started && runner.isRunning)
-                    .tabItem { Label("Library", systemImage: "square.grid.2x2.fill") }
+                    .tabItem { Label("المكتبة", systemImage: "square.grid.2x2.fill") }
                     .tag(HuskTab.library)
 
                 FilesTab()
-                    .tabItem { Label("Files", systemImage: "folder.fill") }
+                    .tabItem { Label("الملفات", systemImage: "folder.fill") }
                     .tag(HuskTab.files)
 
                 SettingsTab()
-                    .tabItem { Label("Settings", systemImage: "gearshape.fill") }
+                    .tabItem { Label("الإعدادات", systemImage: "gearshape.fill") }
                     .tag(HuskTab.settings)
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -129,8 +129,8 @@ struct ContentView: View {
         .alert(guest.update.title, isPresented: Binding(
                 get: { guest.update.isSomething },
                 set: { if !$0 { guest.dismissUpdate() } })) {
-            Button("Download") { guest.applyUpdate() }
-            Button("Not now", role: .cancel) { guest.dismissUpdate() }
+            Button("تنزيل") { guest.applyUpdate() }
+            Button("لاحقًا", role: .cancel) { guest.dismissUpdate() }
         } message: {
             Text(guest.update.detail)
         }
@@ -311,7 +311,7 @@ struct GuestScreenView: View {
                     ProgressView(value: Double(runner.bootProgress), total: 100)
                         .progressViewStyle(.linear)
                         .frame(width: 200)
-                    Text(runner.setupMessage ?? "Starting Android…")
+                    Text(runner.setupMessage ?? "جارٍ تشغيل أندرويد…")
                         .font(.caption2).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
@@ -360,7 +360,7 @@ struct GuestScreenView: View {
 
                         Menu {
                             Button { onBack() } label: {
-                                Label("Back to Husk", systemImage: "chevron.left")
+                                Label("رجوع إلى Husk", systemImage: "chevron.left")
                             }
                             // Android's own Home key, over the bridge. Three-button
                             // navigation is not drawn in this guest, so without it
@@ -371,7 +371,7 @@ struct GuestScreenView: View {
                                         "input keyevent KEYCODE_HOME", timeout: 20)
                                     HuskLog.log("ui", "sent HOME to Android")
                                 }
-                            } label: { Label("Home", systemImage: "house") }
+                            } label: { Label("الرئيسية", systemImage: "house") }
                             // Android will not reshape its panel, so when an app
                             // asks for landscape it turns its own composition
                             // inside a portrait frame. This turns it back.
@@ -379,19 +379,19 @@ struct GuestScreenView: View {
                                 HuskGLView.rotated.toggle()
                                 rotated = HuskGLView.rotated
                             } label: {
-                                Label(rotated ? "Unrotate picture" : "Rotate picture",
+                                Label(rotated ? "إلغاء التدوير" : "تدوير الصورة",
                                       systemImage: "rotate.right")
                             }
                             Divider()
                             Button {
                                 QemuRunner.shared.saveState(reason: "asked from full screen")
                             } label: {
-                                Label(runner.isSavingState ? "Saving…" : "Save Android",
+                                Label(runner.isSavingState ? "جارٍ الحفظ…" : "حفظ أندرويد",
                                       systemImage: "externaldrive.badge.checkmark")
                             }
                             .disabled(runner.isSavingState)
                             Button { showLogs = true } label: {
-                                Label("Console", systemImage: "terminal")
+                                Label("السجل", systemImage: "terminal")
                             }
                         } label: {
                             Image(systemName: "ellipsis")
@@ -449,7 +449,7 @@ struct SetupView: View {
                     .font(.system(size: 26, weight: .semibold))
                     .tracking(10)
                     .padding(.leading, 10)
-                Text("Android apps, on your iPhone")
+                Text("تطبيقات أندرويد، على آيفونك")
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.textDim)
                     .padding(.top, -8)
@@ -495,10 +495,10 @@ struct SetupView: View {
                 } else {
                     ProgressView()
                 }
-                Text(runner.setupMessage.map { "Android: \($0)" } ?? "Starting Android…")
+                Text(runner.setupMessage.map { "أندرويد: \($0)" } ?? "جارٍ تشغيل أندرويد…")
                     .font(.callout).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center).padding(.horizontal, 36)
-                Text("First run downloads Android and can take several minutes.")
+                Text("أول تشغيل ينزّل أندرويد وقد يستغرق عدة دقائق.")
                     .font(.caption2).foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center).padding(.horizontal, 40)
             }
@@ -507,28 +507,28 @@ struct SetupView: View {
             case .downloading(let p, let received, let total):
                 VStack(spacing: 10) {
                     Text(guest.hasShippedSnapshot || GuestImage.shared.isFetchingSnapshot
-                         ? "Downloading pre-booted Android"
-                         : "Downloading Android runtime").font(.headline)
+                         ? "جارٍ تنزيل أندرويد المُقلَع مسبقًا"
+                         : "جارٍ تنزيل بيئة أندرويد").font(.headline)
                     ProgressView(value: p).padding(.horizontal, 50)
                     Text("\(fmt(received)) of \(total > 0 ? fmt(total) : "…")")
                         .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                    Button("Cancel") { guest.cancel() }.font(.footnote)
+                    Button("إلغاء") { guest.cancel() }.font(.footnote)
                 }
             case .installing:
-                VStack(spacing: 10) { ProgressView(); Text("Installing…").font(.callout) }
+                VStack(spacing: 10) { ProgressView(); Text("جارٍ التثبيت…").font(.callout) }
             case .failed(let message):
                 VStack(spacing: 10) {
-                    Text("Something went wrong").font(.headline).foregroundStyle(.red)
+                    Text("صار خطأ").font(.headline).foregroundStyle(.red)
                     Text(message).font(.caption).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center).padding(.horizontal, 34)
-                    Button("Try again") { JITBootstrap.prewarm(); guest.download() }.buttonStyle(.borderedProminent)
+                    Button("حاول مرة ثانية") { JITBootstrap.prewarm(); guest.download() }.buttonStyle(.borderedProminent)
                 }
             case .missing:
                 VStack(spacing: 12) {
-                    Text("Husk needs its Android runtime — about 760 MB. Android itself is downloaded afterwards by the runtime.")
+                    Text("يحتاج Husk إلى بيئة تشغيل أندرويد — حوالي 760 ميغابايت. أما أندرويد نفسه فيُنزَّل بعد ذلك بواسطة بيئة التشغيل.")
                         .font(.callout).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center).padding(.horizontal, 36)
-                    Button("Download Android runtime") {
+                    Button("تنزيل بيئة أندرويد") {
                         // Claim the JIT region before the download, not after:
                         // it takes about a minute, and StikDebug will have let
                         // go by the end of it.
@@ -634,12 +634,12 @@ struct LogView: View {
                     }
                 }
             }
-            .navigationTitle("Logs")
+            .navigationTitle("السجلات")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     if isSheet {
-                        Button("Done") { dismiss() }
+                        Button("تم") { dismiss() }
                     }
                 }
                 ToolbarItem(placement: .primaryAction) {
@@ -695,7 +695,7 @@ struct ControlsSheet: View {
             Theme.backdrop
             VStack(spacing: 16) {
                 HStack {
-                    Text("Controls")
+                    Text("التحكم")
                         .font(.system(size: 20, weight: .semibold))
                         .foregroundStyle(Theme.text)
                     Spacer()
@@ -710,24 +710,23 @@ struct ControlsSheet: View {
                 }
 
                 RowGroup {
-                    row("hand.tap.fill", "Touch", on: true, available: true)
+                    row("hand.tap.fill", "اللمس", on: true, available: true)
                     RowDivider()
                     Button {
                         keyboard.toggle()
                         HuskLog.log("kbd", "keyboard \(keyboard ? "shown" : "hidden")")
                         dismiss()
                     } label: {
-                        row("keyboard", "Keyboard", on: keyboard, available: true)
+                        row("keyboard", "لوحة المفاتيح", on: keyboard, available: true)
                     }
                     .buttonStyle(.plain)
                     RowDivider()
-                    row("gamecontroller", "Gamepad", on: false, available: false)
+                    row("gamecontroller", "يد التحكم", on: false, available: false)
                     RowDivider()
-                    row("computermouse", "Mouse", on: false, available: false)
+                    row("computermouse", "الفأرة", on: false, available: false)
                 }
 
-                Text("Touch always works. A gamepad and a pointer are not wired "
-                   + "through to Android yet.")
+                Text("اللمس يعمل دائمًا. يد التحكم والمؤشر غير موصولَين بأندرويد بعد.")
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.textDim)
                     .multilineTextAlignment(.center)
@@ -757,7 +756,7 @@ struct ControlsSheet: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Theme.accent)
             } else if !available {
-                Text("Not yet").font(.system(size: 12)).foregroundStyle(Theme.textDim)
+                Text("قريبًا").font(.system(size: 12)).foregroundStyle(Theme.textDim)
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 12)

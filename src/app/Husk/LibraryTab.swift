@@ -48,7 +48,7 @@ struct LibraryTab: View {
     @ViewBuilder private var content: some View {
         ScrollView {
             VStack(spacing: 16) {
-                HuskHeader(mark: true, title: "Library") {
+                HuskHeader(mark: true, title: "المكتبة") {
                     HStack(spacing: 10) {
                         // Android itself, from the library, whenever it is up.
                         // It used to be reachable only while it was starting,
@@ -80,24 +80,24 @@ struct LibraryTab: View {
                             .contextMenu {
                                 Button {
                                     host.launch(app.name) { onOpenGuest() }
-                                } label: { Label("Launch", systemImage: "play.fill") }
+                                } label: { Label("تشغيل", systemImage: "play.fill") }
                                 .disabled(!host.isReady || host.busy != nil)
                                 Button {
                                     router.library.append(app)
-                                } label: { Label("Details", systemImage: "info.circle") }
+                                } label: { Label("التفاصيل", systemImage: "info.circle") }
                             }
                         }
                     }
                 } else if !query.isEmpty {
-                    EmptyState(title: "No matches",
-                               message: "Nothing installed is called “\(query)”.",
+                    EmptyState(title: "لا نتائج",
+                               message: "لا يوجد تطبيق مثبّت باسم “\(query)”.",
                                systemImage: "magnifyingglass")
                 } else if host.packages.isEmpty && host.isReady {
-                    EmptyState(title: "No apps yet",
-                               message: "Install an APK and it appears here. Split sets "
-                                      + "work too — pick every piece at once.",
+                    EmptyState(title: "لا تطبيقات بعد",
+                               message: "ثبّت ملف APK وسيظهر هنا. الحزم المقسّمة "
+                                      + "مدعومة أيضًا — اختر كل القطع معًا.",
                                systemImage: "square.grid.2x2",
-                               actionTitle: "Install APK(s)",
+                               actionTitle: "تثبيت APK",
                                action: { importing = true })
                 }
             }
@@ -112,7 +112,7 @@ struct LibraryTab: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(Theme.textDim)
-            TextField("Search apps", text: $query)
+            TextField("ابحث في التطبيقات", text: $query)
                 .focused($searchFocused)
                 .foregroundStyle(Theme.text)
                 .autocorrectionDisabled()
@@ -144,7 +144,7 @@ struct LibraryTab: View {
                 }
             }
             VStack(alignment: .leading, spacing: 3) {
-                Text(started ? "Starting Android" : "Android is not running")
+                Text(started ? "جارٍ تشغيل أندرويد" : "أندرويد لا يعمل")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Theme.text)
                 if started, runner.bootProgress > 0 {
@@ -154,15 +154,15 @@ struct LibraryTab: View {
                 } else {
                     Text(started ? host.status
                                  : JITBootstrap.isDebuggerAttached
-                                   ? "Your apps are here; start it to open them."
-                                   : "Husk needs JIT, which only a debugger can grant.")
+                                   ? "تطبيقاتك هنا؛ شغّله لفتحها."
+                                   : "يحتاج Husk إلى JIT، ولا يمنحه إلا مصحح.")
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.textDim)
                         .lineLimit(1)
                 }
             }
             Spacer(minLength: 6)
-            Button(started ? "Show" : JITBootstrap.isDebuggerAttached ? "Start" : "JIT") {
+            Button(started ? "عرض" : JITBootstrap.isDebuggerAttached ? "تشغيل" : "JIT") {
                 if started { onOpenGuest() } else { onStartAndroid() }
             }
             .font(.system(size: 13, weight: .semibold))
@@ -209,7 +209,7 @@ struct LibraryTab: View {
     }
 
     private func plural(_ c: String) -> String {
-        c == "Game" ? "Games" : c == "App" ? "Apps" : "Tools"
+        c == "Game" ? "الألعاب" : c == "App" ? "التطبيقات" : "الأدوات"
     }
 
     private var shown: [AndroidHost.Package] {

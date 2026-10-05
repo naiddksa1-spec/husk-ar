@@ -82,8 +82,8 @@ final class TLUnityUIView: UIView, UIKeyInput {
         var p = husk_unity_perf()
         husk_unity_perf_snapshot(&p)
         let text = p.fps > 0
-            ? String(format: "%.0f fps · %.1f ms · max %.0f", p.fps, p.mean_ms, p.max_ms)
-            : "starting"
+            ? String(format: "%.0f fps · %.1f ms · أقصى %.0f", p.fps, p.mean_ms, p.max_ms)
+            : "يبدأ…"
         stats.text = text
         onStats?(text)
     }
@@ -176,7 +176,7 @@ final class TLUnityUIView: UIView, UIKeyInput {
         typedLabel.autoresizingMask = [.flexibleWidth]
         bar.addSubview(typedLabel)
         let done = UIButton(type: .system)
-        done.setTitle("Done", for: .normal)
+        done.setTitle("تم", for: .normal)
         done.titleLabel?.font = .systemFont(ofSize: 17, weight: .semibold)
         done.frame = CGRect(x: 100, y: 0, width: 80, height: 44)
         done.autoresizingMask = [.flexibleLeftMargin]
@@ -311,19 +311,19 @@ final class TLUnityModel: ObservableObject {
 
     var statusText: String {
         switch state {
-        case Int32(HUSK_UNITY_STARTING): return "Loading the engine…"
-        case Int32(HUSK_UNITY_RUNNING):  return "Running"
-        case Int32(HUSK_UNITY_FAILED):   return "Could not start — see the log"
-        case Int32(HUSK_UNITY_ENDED):    return "The game exited"
-        default:                         return "Starting"
+        case Int32(HUSK_UNITY_STARTING): return "جارٍ تحميل المحرك…"
+        case Int32(HUSK_UNITY_RUNNING):  return "شغال"
+        case Int32(HUSK_UNITY_FAILED):   return "تعذّر التشغيل — شوف السجل"
+        case Int32(HUSK_UNITY_ENDED):    return "اللعبة خرجت"
+        default:                         return "يبدأ…"
         }
     }
 
     var subStatusText: String {
         switch state {
-        case Int32(HUSK_UNITY_RUNNING): return "\(frames) frame(s) drawn · native runtime"
-        case Int32(HUSK_UNITY_STARTING): return "Loading libraries and starting the engine"
-        default: return "Native runtime"
+        case Int32(HUSK_UNITY_RUNNING): return "تم رسم \(frames) إطار · المحرك الأصلي"
+        case Int32(HUSK_UNITY_STARTING): return "جارٍ تحميل المكتبات وتشغيل المحرك"
+        default: return "المحرك الأصلي"
         }
     }
 
@@ -389,7 +389,7 @@ struct TLUnityAttemptView: View {
                             Image(systemName: showLog ? "chevron.down" : "chevron.right")
                                 .font(.system(size: 11, weight: .bold))
                                 .frame(width: 12)
-                            Text("ATTEMPT LOG")
+                            Text("سجل المحاولة")
                                 .font(.technical(11, weight: .bold))
                         }
                         .foregroundStyle(Theme.textDim)
@@ -398,10 +398,10 @@ struct TLUnityAttemptView: View {
                     Spacer()
                     if showLog {
                         Button { UIPasteboard.general.string = model.logText } label: {
-                            Label("Copy", systemImage: "doc.on.doc").font(.system(size: 12))
+                            Label("نسخ", systemImage: "doc.on.doc").font(.system(size: 12))
                         }
                     } else {
-                        Text("tap to show")
+                        Text("اضغط للعرض")
                             .font(.system(size: 11))
                             .foregroundStyle(Theme.textDim.opacity(0.7))
                     }
@@ -418,7 +418,7 @@ struct TLUnityAttemptView: View {
                 if showLog {
                     ScrollViewReader { proxy in
                         ScrollView {
-                            Text(model.logText.isEmpty ? "Starting…" : model.logText)
+                            Text(model.logText.isEmpty ? "يبدأ…" : model.logText)
                                 .font(.technical(11))
                                 .foregroundStyle(Theme.text)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -436,7 +436,7 @@ struct TLUnityAttemptView: View {
             .navigationTitle(app.label)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button("إغلاق") { dismiss() } }
             }
         }
         // Swipes near the edges are the game's: keep the system from taking them for itself.
@@ -456,7 +456,7 @@ struct TLCocosAttemptView: View {
     @StateObject private var model = TLUnityModel()
     @AppStorage("husk.tl.unity.showLog") private var showLogSetting = false
     @AppStorage(TranslationLayer.devInfoKey) private var devInfo = false
-    @State private var stats = "starting"
+    @State private var stats = "يبدأ…"
     private var showLog: Bool { get { showLogSetting && devInfo } nonmutating set { showLogSetting = newValue } }
 
     /// Geometry Dash and the like are cocos2d-x; Minecraft is built on GameActivity. Both are landscape.
@@ -480,9 +480,9 @@ struct TLCocosAttemptView: View {
                 bar
                 if let other = blockedBy {
                     VStack(spacing: 8) {
-                        Text("Another game is already loaded")
+                        Text("لعبة ثانية محمّلة أصلًا")
                             .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
-                        Text("\(other) was started in this session, and a game cannot be unloaded once it has started. Close Husk completely and open it again to run \(app.label).")
+                        Text("\(other) بدأت في هذه الجلسة، وما يمكن إيقاف اللعبة بعد ما تشتغل. أغلق Husk تمامًا وافتحه من جديد عشان تشغّل \(app.label).")
                             .font(.system(size: 13)).foregroundStyle(.white.opacity(0.7))
                             .multilineTextAlignment(.center).frame(maxWidth: 460)
                     }
@@ -508,7 +508,7 @@ struct TLCocosAttemptView: View {
     private var bar: some View {
         HStack(spacing: 12) {
             Button { dismiss() } label: {
-                Label("Close", systemImage: "xmark").font(.system(size: 13, weight: .semibold))
+                Label("إغلاق", systemImage: "xmark").font(.system(size: 13, weight: .semibold))
             }
             .tint(.white)
             Circle().fill(model.statusColor).frame(width: 7, height: 7)
@@ -520,7 +520,7 @@ struct TLCocosAttemptView: View {
             }
             if devInfo {
                 Button { withAnimation(.snappy(duration: 0.25)) { showLog.toggle() } } label: {
-                    Text(showLog ? "Hide log" : "Log").font(.system(size: 12, weight: .semibold))
+                    Text(showLog ? "إخفاء السجل" : "السجل").font(.system(size: 12, weight: .semibold))
                 }
                 .tint(.white)
             }
@@ -533,16 +533,16 @@ struct TLCocosAttemptView: View {
     private var logPanel: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("ATTEMPT LOG").font(.technical(10, weight: .bold)).foregroundStyle(Theme.textDim)
+                Text("سجل المحاولة").font(.technical(10, weight: .bold)).foregroundStyle(Theme.textDim)
                 Spacer()
                 Button { UIPasteboard.general.string = model.logText } label: {
-                    Label("Copy", systemImage: "doc.on.doc").font(.system(size: 11))
+                    Label("نسخ", systemImage: "doc.on.doc").font(.system(size: 11))
                 }
             }
             .padding(.horizontal, 10).padding(.vertical, 6)
             ScrollViewReader { proxy in
                 ScrollView {
-                    Text(model.logText.isEmpty ? "Starting…" : model.logText)
+                    Text(model.logText.isEmpty ? "يبدأ…" : model.logText)
                         .font(.technical(10))
                         .foregroundStyle(Theme.text)
                         .frame(maxWidth: .infinity, alignment: .leading)

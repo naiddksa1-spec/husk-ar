@@ -17,7 +17,7 @@ struct FilesTab: View {
 
     var body: some View {
         NavigationStack(path: $router.files) {
-            DirectoryView(path: Self.root, title: "Files")
+            DirectoryView(path: Self.root, title: "الملفات")
                 .navigationDestination(for: String.self) { path in
                     DirectoryView(path: path,
                                   title: (path as NSString).lastPathComponent)
@@ -55,17 +55,17 @@ struct DirectoryView: View {
         .huskFilePicker(isPresented: $importing) { urls in
             host.sendFiles(urls, to: path)
         }
-        .confirmationDialog("Install \(installing?.name ?? "")?",
+        .confirmationDialog("ثبّت \(installing?.name ?? "")؟",
                             isPresented: Binding(get: { installing != nil },
                                                  set: { if !$0 { installing = nil } }),
                             titleVisibility: .visible) {
-            Button("Install") {
+            Button("تثبيت") {
                 if let apk = installing { host.installFromGuest(apk.path, name: apk.name) }
                 installing = nil
             }
-            Button("Cancel", role: .cancel) { installing = nil }
+            Button("إلغاء", role: .cancel) { installing = nil }
         } message: {
-            Text("Android installs it from where it already is — nothing is copied.")
+            Text("يثبّته أندرويد من مكانه الحالي — لا يُنسخ شيء.")
         }
         .task(id: path) { load() }
         .refreshable { load() }
@@ -95,13 +95,13 @@ struct DirectoryView: View {
                 if loading && entries.isEmpty {
                     ProgressView().tint(Theme.accent).padding(.top, 60)
                 } else if let failure {
-                    EmptyState(title: "Cannot read this folder",
+                    EmptyState(title: "تعذّر قراءة هذا المجلد",
                                message: failure, systemImage: "lock")
                 } else if entries.isEmpty {
-                    EmptyState(title: "Empty",
-                               message: "Nothing is in this folder yet.",
+                    EmptyState(title: "فارغ",
+                               message: "لا يوجد شيء في هذا المجلد بعد.",
                                systemImage: "folder",
-                               actionTitle: "Import files",
+                               actionTitle: "استيراد ملفات",
                                action: { showImportSheet = true })
                 } else {
                     RowGroup {
@@ -140,11 +140,11 @@ struct DirectoryView: View {
     private func storage(_ s: (free: Int64, total: Int64)) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Storage")
+                Text("التخزين")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(Theme.text)
                 Spacer()
-                Text("\(AppDetailView.bytes(s.total - s.free)) of "
+                Text("\(AppDetailView.bytes(s.total - s.free)) من "
                    + "\(AppDetailView.bytes(s.total))")
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.textDim)
@@ -242,11 +242,11 @@ struct ImportSheet: View {
                     Image(systemName: "doc.badge.plus")
                         .font(.system(size: 30, weight: .light))
                         .foregroundStyle(Theme.textDim)
-                    Text("Tap to import")
+                    Text("اضغط للاستيراد")
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(Theme.text)
-                    Text("Goes to \((destination as NSString).lastPathComponent). "
-                       + "Unmodified APKs install from here too.")
+                    Text("يُستورد إلى \((destination as NSString).lastPathComponent). "
+                       + "ملفات APK غير المعدّلة تُثبَّت من هنا أيضًا.")
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.textDim)
                         .multilineTextAlignment(.center)
@@ -261,7 +261,7 @@ struct ImportSheet: View {
                 .contentShape(Rectangle())
                 .onTapGesture { onBrowse() }
 
-                Button("Browse files", action: onBrowse)
+                Button("تصفح الملفات", action: onBrowse)
                     .buttonStyle(PrimaryButtonStyle())
                 Spacer(minLength: 0)
             }
