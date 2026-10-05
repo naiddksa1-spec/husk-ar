@@ -129,8 +129,8 @@ final class HuskGLView: UIView {
             // single early sample described a transient as if it were the
             // steady state.
             for t in [4.0, 30.0, 90.0] {
-                DispatchQueue.main.asyncAfter(deadline: .now() + t) {
-                    self.describePlacement(why: "\(Int(t))s after reaching a window")
+                DispatchQueue.main.asyncAfter(deadline: .now() + t) { [weak self] in
+                    self?.describePlacement(why: "\(Int(t))s after reaching a window")
                 }
             }
         }

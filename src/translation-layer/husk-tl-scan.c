@@ -14,6 +14,8 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
+#include <limits.h>
 #include <string.h>
 
 /* No native library is anywhere near this; a bigger entry is not one. */
@@ -227,6 +229,7 @@ char *husk_tl_scan(const char *const *paths, int count)
     tl_json j;
     tl_json_init(&j);
     tl_json_begin_object(&j);
+    if (!paths || count < 0) count = 0;
 
     bool abis[NABIS] = { false };
     long long dex_count = 0, dex_bytes = 0;
@@ -247,6 +250,7 @@ char *husk_tl_scan(const char *const *paths, int count)
     tl_json_key(&j, "libraries");
     tl_json_begin_array(&j);
     for (int p = 0; p < count && !error[0]; p++) {
+        if (!paths[p]) { snprintf(error, sizeof(error), "null APK path"); break; }
         tl_zip z;
         char zerr[160] = "";
         if (!tl_zip_open(&z, paths[p], zerr, sizeof(zerr))) {
@@ -260,8 +264,11 @@ char *husk_tl_scan(const char *const *paths, int count)
             if (!strcmp(e->name, "AndroidManifest.xml")) {
                 manifest = true;
             } else if (is_dex(e->name)) {
-                dex_count++;
-                dex_bytes += (long long)e->usize;
+                if (dex_count < LLONG_MAX) dex_count++;
+                if (e->usize > (uint64_t)LLONG_MAX - (uint64_t)dex_bytes)
+                    dex_bytes = LLONG_MAX;
+                else
+                    dex_bytes += (long long)e->usize;
             }
             if (abi < 0) {
                 continue;

@@ -20,6 +20,18 @@ struct SettingsTab: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 22) {
                         HuskHeader(mark: true, title: "الإعدادات")
+                        HStack(spacing: 16) {
+                            HuskMark(size: 58)
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text("مدار")
+                                    .font(.headline)
+                                Text("أندرويد على آيفونك")
+                                    .font(.subheadline).foregroundStyle(Theme.textDim)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(20)
+                        .huskCard()
 
                         group("عام") {
                             link(LibrarySettings(), "square.grid.2x2", "المكتبة",

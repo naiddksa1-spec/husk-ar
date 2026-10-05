@@ -31,6 +31,9 @@ final class HuskMetalPresenter {
     private var queue: MTLCommandQueue?
     private var pipeline: MTLRenderPipelineState?
     private var sampler: MTLSamplerState?
+    /// Reused by the single presenter thread; only its drawable texture and
+    /// clear values change per frame.
+    private let renderPass = MTLRenderPassDescriptor()
     private let lock = NSLock()
     private var complained = false
     private var presented: UInt64 = 0
@@ -150,7 +153,7 @@ final class HuskMetalPresenter {
         // frame, not an error, and the guest will send another.
         guard let drawable = layer.nextDrawable() else { return }
 
-        let pass = MTLRenderPassDescriptor()
+        let pass = renderPass
         pass.colorAttachments[0].texture = drawable.texture
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)

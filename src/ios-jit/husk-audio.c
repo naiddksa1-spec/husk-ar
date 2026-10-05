@@ -128,26 +128,40 @@ static void husk_enable_out(HWVoiceOut *hw, bool enable)
  */
 static size_t husk_write(HWVoiceOut *hw, void *buf, size_t len)
 {
+    if (buf == NULL || len == 0) {
+        return 0;
+    }
+
     const size_t frame_bytes = sizeof(int16_t) * HUSK_AUDIO_CHANNELS;
     uint32_t w = qatomic_read(&husk_audio.write_pos);
     uint32_t r = qatomic_read(&husk_audio.read_pos);
-    size_t free_frames = HUSK_RING_FRAMES - (size_t)(w - r);
+    uint32_t used = w - r;
+    size_t free_frames = used >= HUSK_RING_FRAMES
+                       ? 0 : HUSK_RING_FRAMES - (size_t)used;
     size_t want = len / frame_bytes;
     size_t n = want < free_frames ? want : free_frames;
     const int16_t *src = buf;
 
-    for (size_t i = 0; i < n; i++) {
-        size_t slot = ((w + i) & HUSK_RING_MASK) * HUSK_AUDIO_CHANNELS;
-        for (int c = 0; c < HUSK_AUDIO_CHANNELS; c++) {
-            husk_audio.ring[slot + c] = src[i * HUSK_AUDIO_CHANNELS + c];
-        }
+    /* Copy each contiguous section in one operation. Apart from being cheaper
+     * than a frame/channel loop, this keeps the producer's critical section
+     * short when QEMU hands us a large mixer buffer. */
+    size_t first = n;
+    size_t until_wrap = HUSK_RING_FRAMES - (w & HUSK_RING_MASK);
+    if (first > until_wrap) {
+        first = until_wrap;
+    }
+    memcpy(&husk_audio.ring[(w & HUSK_RING_MASK) * HUSK_AUDIO_CHANNELS],
+           src, first * frame_bytes);
+    if (first < n) {
+        memcpy(husk_audio.ring, src + first * HUSK_AUDIO_CHANNELS,
+               (n - first) * frame_bytes);
     }
 
     /* Published only after the samples are in place, so a reader that sees the
      * new index cannot read a frame that has not been written. */
     smp_wmb();
     qatomic_set(&husk_audio.write_pos, w + (uint32_t)n);
-    husk_audio.frames_in += n;
+    qatomic_fetch_add(&husk_audio.frames_in, (uint64_t)n);
 
     return n * frame_bytes;
 }
@@ -211,17 +225,26 @@ static void husk_enable_in(HWVoiceIn *hw, bool enable)
 
 int husk_audio_pull(int16_t *dst, int frames)
 {
+    if (dst == NULL || frames <= 0) {
+        return 0;
+    }
+
     uint32_t r = qatomic_read(&husk_audio.read_pos);
     uint32_t w = qatomic_read(&husk_audio.write_pos);
     size_t have = (size_t)(w - r);
     size_t n = (size_t)frames < have ? (size_t)frames : have;
 
     smp_rmb();
-    for (size_t i = 0; i < n; i++) {
-        size_t slot = ((r + i) & HUSK_RING_MASK) * HUSK_AUDIO_CHANNELS;
-        for (int c = 0; c < HUSK_AUDIO_CHANNELS; c++) {
-            dst[i * HUSK_AUDIO_CHANNELS + c] = husk_audio.ring[slot + c];
-        }
+    size_t first = n;
+    size_t until_wrap = HUSK_RING_FRAMES - (r & HUSK_RING_MASK);
+    if (first > until_wrap) {
+        first = until_wrap;
+    }
+    memcpy(dst, &husk_audio.ring[(r & HUSK_RING_MASK) * HUSK_AUDIO_CHANNELS],
+           first * sizeof(*dst) * HUSK_AUDIO_CHANNELS);
+    if (first < n) {
+        memcpy(dst + first * HUSK_AUDIO_CHANNELS, husk_audio.ring,
+               (n - first) * sizeof(*dst) * HUSK_AUDIO_CHANNELS);
     }
     qatomic_set(&husk_audio.read_pos, r + (uint32_t)n);
 
@@ -231,7 +254,7 @@ int husk_audio_pull(int16_t *dst, int frames)
     if ((size_t)frames > n) {
         memset(dst + n * HUSK_AUDIO_CHANNELS, 0,
                ((size_t)frames - n) * HUSK_AUDIO_CHANNELS * sizeof(int16_t));
-        husk_audio.underruns += (uint64_t)frames - n;
+        qatomic_fetch_add(&husk_audio.underruns, (uint64_t)frames - n);
     }
     return (int)n;
 }
@@ -241,8 +264,15 @@ bool husk_audio_active(void)
     return qatomic_read(&husk_audio.running);
 }
 
-uint64_t husk_audio_frames_in(void) { return husk_audio.frames_in; }
-uint64_t husk_audio_underruns(void) { return husk_audio.underruns; }
+uint64_t husk_audio_frames_in(void)
+{
+    return qatomic_read(&husk_audio.frames_in);
+}
+
+uint64_t husk_audio_underruns(void)
+{
+    return qatomic_read(&husk_audio.underruns);
+}
 
 /* ----------------------------------------------------------- registration */
 

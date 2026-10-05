@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 import Compression
+import zlib
 
 /// Manages the Android guest that lives in Documents.
 ///
@@ -64,7 +65,7 @@ final class GuestImage: ObservableObject {
     static let imageVersion = "v12"
 
     /// Version shared by the blank userdata seed and downloaded snapshots.
-    private static let userdataSeedVersion = "v10"
+    nonisolated private static let userdataSeedVersion = "v10"
 
     /// Whether to fetch the pre-booted snapshot rather than boot from cold.
     static var wantsSnapshot: Bool {
@@ -303,11 +304,13 @@ final class GuestImage: ObservableObject {
             return (nil, "الحجم \(size) بايت فقط، والمتوقع "
                         + "\(minimumPlausibleSize / (1024 * 1024)) م.ب على الأقل\(hint)")
         }
-        guard let fh = FileHandle(forReadingAtPath: path),
-              let head = try? fh.read(upToCount: 4), head.count == 4 else {
+        guard let fh = FileHandle(forReadingAtPath: path) else {
             return (nil, "تعذّرت قراءة ترويسة الملف")
         }
-        try? fh.close()
+        defer { try? fh.close() }
+        guard let head = try? fh.read(upToCount: 4), head.count == 4 else {
+            return (nil, "تعذّرت قراءة ترويسة الملف")
+        }
         guard Array(head) == qcow2Magic else {
             let hex = head.map { String(format: "%02x", $0) }.joined(separator: " ")
             return (nil, "ليست صورة qcow2 (الترويسة كانت \(hex)، والمتوقعة 51 46 49 fb)")
@@ -359,7 +362,7 @@ final class GuestImage: ObservableObject {
     /// than dead: the bridge still folds it into the log every poll, replaying
     /// Debian and Waydroid text long after either existed, which reads exactly
     /// like a live guest saying the wrong thing.
-    private func cleanUpPreviousGuest() {
+    nonisolated private func cleanUpPreviousGuest() {
         let fm = FileManager.default
         let stale = ["husk-guest.qcow2", "husk-guest.version",
                      "edk2-vars.fd", "edk2-vars.fd.layout",
@@ -378,7 +381,11 @@ final class GuestImage: ObservableObject {
         }
     }
 
-    func prepareFirmware() throws {
+    private static let firmwareLock = NSLock()
+
+    nonisolated func prepareFirmware() throws {
+        Self.firmwareLock.lock()
+        defer { Self.firmwareLock.unlock() }
         cleanUpPreviousGuest()
         let fm = FileManager.default
         if !fm.fileExists(atPath: firmwarePath) {
@@ -556,8 +563,7 @@ final class GuestImage: ObservableObject {
         DispatchQueue.global(qos: .userInitiated).async {
             let dest = URL(fileURLWithPath: self.userdataPath)
             do {
-                try? FileManager.default.removeItem(at: dest)
-                try Self.gunzip(from: tempURL, to: dest)
+                try Self.installSnapshot(from: tempURL, to: dest)
                 try? FileManager.default.removeItem(at: tempURL)
                 try Self.userdataSeedVersion.write(toFile: self.userdataPath + ".seed",
                                                    atomically: true, encoding: .utf8)
@@ -570,14 +576,14 @@ final class GuestImage: ObservableObject {
                 self.recordSnapshotPins()
                 let size = (try? FileManager.default
                     .attributesOfItem(atPath: dest.path)[.size] as? Int) ?? 0
-                HuskLog.log("guest", "snapshot ready (\(size ?? 0) bytes); "
+                HuskLog.log("guest", "snapshot ready (\(size) bytes); "
                                    + "Android will be restored, not booted")
                 DispatchQueue.main.async { self.isFetchingSnapshot = false; self.state = .ready }
             } catch {
                 HuskLog.log("guest", "snapshot unpack failed: \(error)")
-                try? FileManager.default.removeItem(at: dest)
-                try? FileManager.default.removeItem(atPath: self.snapshotStampPath)
+                try? FileManager.default.removeItem(at: tempURL)
                 DispatchQueue.main.async {
+                    self.isFetchingSnapshot = false
                     self.state = .failed("تعذّر فك ضغط اللقطة: \(error.localizedDescription)")
                 }
             }
@@ -616,8 +622,7 @@ final class GuestImage: ObservableObject {
                 }
                 let dest = URL(fileURLWithPath: self.userdataPath)
                 do {
-                    try? FileManager.default.removeItem(at: dest)
-                    try Self.gunzip(from: fetched.url, to: dest)
+                    try Self.installSnapshot(from: fetched.url, to: dest)
                     try? FileManager.default.removeItem(at: fetched.url)
                     try? fetched.digest.write(toFile: self.snapshotDigestPath,
                                               atomically: true, encoding: .utf8)
@@ -626,11 +631,11 @@ final class GuestImage: ObservableObject {
                     self.recordSnapshotPins()
                     let size = (try? FileManager.default
                         .attributesOfItem(atPath: dest.path)[.size] as? Int) ?? 0
-                    HuskLog.log("guest", "snapshot unpacked (\(size ?? 0) bytes)")
+                    HuskLog.log("guest", "snapshot unpacked (\(size) bytes)")
                     completion(true)
                 } catch {
                     HuskLog.log("guest", "snapshot unpack failed: \(error)")
-                    try? FileManager.default.removeItem(at: dest)
+                    try? FileManager.default.removeItem(at: fetched.url)
                     completion(false)
                 }
             })
@@ -661,76 +666,95 @@ final class GuestImage: ObservableObject {
 
     /// Streaming gunzip.
     ///
-    /// Apple's Compression framework speaks raw DEFLATE, not the gzip
-    /// container, so the header is parsed and skipped by hand. Streamed in
-    /// chunks because the output is nearly four gigabytes and will not be held
-    /// in memory on a phone.
-    static func gunzip(from src: URL, to dst: URL) throws {
+    /// Stream in chunks: the output is nearly four gigabytes and cannot be
+    /// held in memory on a phone.
+    /// Stage and validate before replacing userdata. Never delete the previous
+    /// image to make room for an unverified or incomplete replacement.
+    nonisolated static func installSnapshot(from src: URL, to dst: URL) throws {
+        let fm = FileManager.default
+        let staging = dst.deletingLastPathComponent()
+            .appendingPathComponent(".snapshot-\(UUID().uuidString).tmp")
+        defer { try? fm.removeItem(at: staging) }
+        try gunzip(from: src, to: staging)
+        let check = validate(path: staging.path)
+        if let problem = check.problem {
+            throw NSError(domain: "husk", code: 4,
+                          userInfo: [NSLocalizedDescriptionKey: problem])
+        }
+        if fm.fileExists(atPath: dst.path) {
+            _ = try fm.replaceItemAt(dst, withItemAt: staging)
+        } else {
+            try fm.moveItem(at: staging, to: dst)
+        }
+    }
+
+    /// zlib validates the gzip header, CRC32 and ISIZE, including truncated
+    /// optional fields. Reject concatenated/trailing data and bound expansion.
+    nonisolated static func gunzip(from src: URL, to dst: URL) throws {
         let input = try FileHandle(forReadingFrom: src)
         defer { try? input.close() }
-        FileManager.default.createFile(atPath: dst.path, contents: nil)
+        guard FileManager.default.createFile(atPath: dst.path, contents: nil) else {
+            throw NSError(domain: "husk", code: 1, userInfo:
+                [NSLocalizedDescriptionKey: "تعذّر إنشاء ملف اللقطة المؤقت"])
+        }
         let output = try FileHandle(forWritingTo: dst)
         defer { try? output.close() }
-
-        // Gzip header: magic, method, flags, mtime, xfl, os -- then optional
-        // extra field, name, comment and header CRC, in that order.
-        var head = try input.read(upToCount: 10) ?? Data()
-        guard head.count == 10, head[0] == 0x1f, head[1] == 0x8b, head[2] == 8 else {
-            throw NSError(domain: "husk", code: 1, userInfo:
-                [NSLocalizedDescriptionKey: "ليس ملف gzip"])
-        }
-        let flg = head[3]
-        if flg & 0x04 != 0 {                                  // FEXTRA
-            let n = try input.read(upToCount: 2) ?? Data()
-            let len = Int(n[0]) | (Int(n[1]) << 8)
-            _ = try input.read(upToCount: len)
-        }
-        for mask in [UInt8(0x08), UInt8(0x10)] where flg & mask != 0 {   // FNAME, FCOMMENT
-            while let b = try input.read(upToCount: 1), b.count == 1, b[0] != 0 {}
-        }
-        if flg & 0x02 != 0 { _ = try input.read(upToCount: 2) }          // FHCRC
-        head = Data()
-
-        var stream = compression_stream(dst_ptr: UnsafeMutablePointer<UInt8>(bitPattern: 1)!,
-                                        dst_size: 0,
-                                        src_ptr: UnsafePointer<UInt8>(bitPattern: 1)!,
-                                        src_size: 0, state: nil)
-        guard compression_stream_init(&stream, COMPRESSION_STREAM_DECODE,
-                                      COMPRESSION_ZLIB) == COMPRESSION_STATUS_OK else {
+        var stream = z_stream()
+        guard inflateInit2_(&stream, 15 + 16, ZLIB_VERSION,
+                            Int32(MemoryLayout<z_stream>.size)) == Z_OK else {
             throw NSError(domain: "husk", code: 2, userInfo:
                 [NSLocalizedDescriptionKey: "تعذّرت تهيئة فك الضغط"])
         }
-        defer { compression_stream_destroy(&stream) }
-
+        defer { inflateEnd(&stream) }
         let chunk = 1 << 20
         let outBuf = UnsafeMutablePointer<UInt8>.allocate(capacity: chunk)
         defer { outBuf.deallocate() }
         var finished = false
-
+        var expanded: UInt64 = 0
+        let maximumExpanded: UInt64 = 8 * 1024 * 1024 * 1024
         while !finished {
             let data = try input.read(upToCount: chunk) ?? Data()
-            let last = data.isEmpty
-            try data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
-                stream.src_ptr = raw.bindMemory(to: UInt8.self).baseAddress
-                    ?? UnsafePointer<UInt8>(bitPattern: 1)!
-                stream.src_size = data.count
-                repeat {
-                    stream.dst_ptr = outBuf
-                    stream.dst_size = chunk
-                    let st = compression_stream_process(&stream, last ? Int32(COMPRESSION_STREAM_FINALIZE.rawValue) : 0)
-                    let produced = chunk - stream.dst_size
-                    if produced > 0 {
-                        output.write(Data(bytes: outBuf, count: produced))
-                    }
-                    if st == COMPRESSION_STATUS_END { finished = true; break }
-                    if st == COMPRESSION_STATUS_ERROR {
-                        throw NSError(domain: "husk", code: 3, userInfo:
-                            [NSLocalizedDescriptionKey: "فشل فك الضغط"])
-                    }
-                } while stream.src_size > 0 || (last && !finished)
+            guard !data.isEmpty else {
+                throw NSError(domain: "husk", code: 3, userInfo:
+                    [NSLocalizedDescriptionKey: "ملف gzip غير مكتمل"])
             }
-            if last { finished = true }
+            try data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+                stream.next_in = UnsafeMutablePointer(mutating: raw.bindMemory(to: UInt8.self).baseAddress!)
+                stream.avail_in = uInt(data.count)
+                repeat {
+                    stream.next_out = outBuf
+                    stream.avail_out = uInt(chunk)
+                    let before = stream.avail_in
+                    let st = inflate(&stream, Z_NO_FLUSH)
+                    let produced = chunk - Int(stream.avail_out)
+                    guard UInt64(produced) <= maximumExpanded - expanded else {
+                        throw NSError(domain: "husk", code: 3, userInfo:
+                            [NSLocalizedDescriptionKey: "اللقطة تتجاوز حد فك الضغط (8 GiB)"])
+                    }
+                    expanded += UInt64(produced)
+                    if produced > 0 {
+                        try output.write(contentsOf: Data(bytes: outBuf, count: produced))
+                    }
+                    if st == Z_STREAM_END {
+                        guard stream.avail_in == 0 else {
+                            throw NSError(domain: "husk", code: 3, userInfo:
+                                [NSLocalizedDescriptionKey: "بيانات إضافية بعد ملف gzip"])
+                        }
+                        finished = true
+                        break
+                    }
+                    if st != Z_OK || (before == stream.avail_in && produced == 0) {
+                        throw NSError(domain: "husk", code: 3, userInfo:
+                            [NSLocalizedDescriptionKey: "فشل فك الضغط أو التحقق من gzip"])
+                    }
+                } while stream.avail_in > 0 || stream.avail_out == 0
+            }
         }
+        guard (try input.read(upToCount: 1) ?? Data()).isEmpty else {
+            throw NSError(domain: "husk", code: 3, userInfo:
+                [NSLocalizedDescriptionKey: "بيانات إضافية بعد ملف gzip"])
+        }
+        try output.synchronize()
     }
 
     func cancel() {

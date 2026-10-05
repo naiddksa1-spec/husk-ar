@@ -21,30 +21,44 @@ static cls_ref *g_tab;           /* open-addressed by hash of the descriptor */
 static size_t g_tab_n;
 static int g_classes;
 
-static uint32_t u32(const dexfile *x, size_t o) { uint32_t v; memcpy(&v, x->d + o, 4); return v; }
-static uint16_t u16(const dexfile *x, size_t o) { uint16_t v; memcpy(&v, x->d + o, 2); return v; }
+static bool in_range(const dexfile *x, size_t o, size_t n) { return o <= x->size && n <= x->size - o; }
+static uint32_t u32(const dexfile *x, size_t o) { uint32_t v = 0; if (in_range(x, o, 4)) memcpy(&v, x->d + o, 4); return v; }
+static uint16_t u16(const dexfile *x, size_t o) { uint16_t v = 0; if (in_range(x, o, 2)) memcpy(&v, x->d + o, 2); return v; }
 
 static uint32_t uleb(const dexfile *x, size_t *o)
 {
     uint32_t r = 0; unsigned sh = 0;
-    for (;;) { uint8_t b = x->d[(*o)++]; r |= (uint32_t)(b & 0x7f) << sh; if (!(b & 0x80)) break; sh += 7; }
-    return r;
+    while (*o < x->size && sh < 32) {
+        uint8_t b = x->d[(*o)++];
+        r |= (uint32_t)(b & 0x7f) << sh;
+        if (!(b & 0x80)) return r;
+        sh += 7;
+    }
+    *o = x->size;
+    return 0;
 }
 
 /* The UTF-8 bytes of string_ids[i], NUL-terminated inside the dex. */
 static const char *str_of(const dexfile *x, uint32_t i)
 {
+    if (i >= x->nstr || i > (SIZE_MAX - x->str_off) / 4 || !in_range(x, x->str_off + 4 * (size_t)i, 4)) return "";
     size_t o = u32(x, x->str_off + 4 * (size_t)i);
+    if (!in_range(x, o, 1)) return "";
     uleb(x, &o);
+    if (o >= x->size || !memchr(x->d + o, 0, x->size - o)) return "";
     return (const char *)x->d + o;
 }
-static const char *type_of(const dexfile *x, uint32_t t) { return str_of(x, u32(x, x->type_off + 4 * (size_t)t)); }
+static const char *type_of(const dexfile *x, uint32_t t)
+{
+    if (t >= x->ntype || t > (SIZE_MAX - x->type_off) / 4 || !in_range(x, x->type_off + 4 * (size_t)t, 4)) return "";
+    return str_of(x, u32(x, x->type_off + 4 * (size_t)t));
+}
 
 /* "Lcom/a/B;" -> "com/a/B" (compared in place; no copy). */
 static bool desc_eq(const char *desc, const char *name)
 {
-    size_t n = strlen(name);
-    return desc[0] == 'L' && !strncmp(desc + 1, name, n) && desc[1 + n] == ';' && desc[2 + n] == 0;
+    size_t n = strlen(name), d = strlen(desc);
+    return d == n + 2 && desc[0] == 'L' && !memcmp(desc + 1, name, n) && desc[n + 1] == ';';
 }
 
 static uint64_t hash_name(const char *s, size_t n)
@@ -54,7 +68,11 @@ static uint64_t hash_name(const char *s, size_t n)
     return h;
 }
 
-static uint64_t hash_desc(const char *desc) { return hash_name(desc + 1, strlen(desc) - 2); }
+static uint64_t hash_desc(const char *desc)
+{
+    size_t n = strlen(desc);
+    return hash_name(n >= 2 ? desc + 1 : desc, n >= 2 ? n - 2 : n);
+}
 
 static void insert(int dex, uint32_t def, const char *desc)
 {
@@ -75,20 +93,34 @@ int tl_dexidx_open(const char *apk_path)
         const tl_zip_entry *e = tl_zip_find(&z, name);
         if (!e) { if (n > 1) break; continue; }
         const uint8_t *data; size_t len; bool owned;
-        if (!tl_zip_data(&z, e, (size_t)1 << 28, &data, &len, &owned, err, sizeof(err))) return -1;
+        if (!tl_zip_data(&z, e, (size_t)1 << 28, &data, &len, &owned, err, sizeof(err))) { tl_zip_close(&z); return -1; }
         if (!owned) {                         /* stored: it points into the APK mapping, which closing would unmap */
             uint8_t *copy = malloc(len);
+            if (!copy) { tl_zip_close(&z); return -1; }
             memcpy(copy, data, len);
             data = copy;
         }
+        if (len < 0x70 || memcmp(data, "dex\n", 4) != 0) {
+            if (owned) free((void *)data);
+            tl_zip_close(&z); return -1;
+        }
+        dexfile candidate = { .d = data, .size = len };
+        candidate.nstr = u32(&candidate, 0x38); candidate.str_off = u32(&candidate, 0x3c);
+        candidate.ntype = u32(&candidate, 0x40); candidate.type_off = u32(&candidate, 0x44);
+        candidate.nproto = u32(&candidate, 0x48); candidate.proto_off = u32(&candidate, 0x4c);
+        candidate.nfield = u32(&candidate, 0x50); candidate.field_off = u32(&candidate, 0x54);
+        candidate.nmeth = u32(&candidate, 0x58); candidate.meth_off = u32(&candidate, 0x5c);
+        candidate.nclass = u32(&candidate, 0x60); candidate.class_off = u32(&candidate, 0x64);
+#define DEX_TABLE_OK(count, off, width) ((off) <= len && (count) <= (uint32_t)((len - (off)) / (width)))
+        if (!DEX_TABLE_OK(candidate.nstr, candidate.str_off, 4) || !DEX_TABLE_OK(candidate.ntype, candidate.type_off, 4)
+            || !DEX_TABLE_OK(candidate.nproto, candidate.proto_off, 12) || !DEX_TABLE_OK(candidate.nfield, candidate.field_off, 8)
+            || !DEX_TABLE_OK(candidate.nmeth, candidate.meth_off, 8) || !DEX_TABLE_OK(candidate.nclass, candidate.class_off, 32)) {
+            if (owned) free((void *)data);
+            tl_zip_close(&z); return -1;
+        }
+#undef DEX_TABLE_OK
         dexfile *x = &g_dex[g_ndex++];
-        x->d = data; x->size = len;
-        memcpy(&x->nstr, data + 0x38, 4);  memcpy(&x->str_off, data + 0x3c, 4);
-        memcpy(&x->ntype, data + 0x40, 4); memcpy(&x->type_off, data + 0x44, 4);
-        memcpy(&x->nproto, data + 0x48, 4); memcpy(&x->proto_off, data + 0x4c, 4);
-        memcpy(&x->nfield, data + 0x50, 4); memcpy(&x->field_off, data + 0x54, 4);
-        memcpy(&x->nmeth, data + 0x58, 4); memcpy(&x->meth_off, data + 0x5c, 4);
-        memcpy(&x->nclass, data + 0x60, 4); memcpy(&x->class_off, data + 0x64, 4);
+        *x = candidate;
         total += x->nclass;
     }
     /* A zip kept open would pin the mapping; the dex bytes are copied or inflated, so close it. */
@@ -96,6 +128,7 @@ int tl_dexidx_open(const char *apk_path)
     g_tab_n = 1;
     while (g_tab_n < total * 2 + 16) g_tab_n <<= 1;
     g_tab = calloc(g_tab_n, sizeof(cls_ref));
+    if (!g_tab) return -1;
     for (int di = 0; di < g_ndex; di++) {
         dexfile *x = &g_dex[di];
         for (uint32_t c = 0; c < x->nclass; c++) {

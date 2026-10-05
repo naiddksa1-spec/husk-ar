@@ -12,7 +12,7 @@ import os
 final class QemuRunner: ObservableObject {
     static let shared = QemuRunner()
     private var thread: Thread?
-    private(set) var isRunning = false
+    @Published private(set) var isRunning = false
 
     /// Last line the guest printed about its own setup. The first-boot service in
     /// the guest writes HUSK-SETUP markers to the serial console, which is already
@@ -1226,6 +1226,15 @@ final class QemuRunner: ObservableObject {
         isRunning = true
         startedAt = Date()
         QemuRunner.bootStarted = Date()
+        bootProgress = 0
+        setupMessage = "جارٍ تهيئة QEMU"
+        QemuRunner.bootCompletedAt = nil
+        QemuRunner.didRestore = false
+
+        // Remove the previous serial file BEFORE QEMU opens its output.
+        // Unlinking after t.start() can leave QEMU writing to an unlinked inode,
+        // while the tailer waits forever for a path that will never reappear.
+        try? FileManager.default.removeItem(atPath: guestSerialLogPath)
 
         let t = Thread { [weak self] in self?.run() }
         t.name = "husk.qemu"
@@ -1537,7 +1546,13 @@ final class QemuRunner: ObservableObject {
         HuskLog.logFootprint("after-main-loop")
         qemu_cleanup()
         HuskLog.log("qemu", "qemu_cleanup() done")
-        isRunning = false
+        // Observable state is consumed by SwiftUI on the main actor. Publishing
+        // from QEMU's worker thread was a data race and could update the view
+        // while it was tearing down the guest surface.
+        DispatchQueue.main.async { [weak self] in
+            self?.isRunning = false
+            self?.thread = nil
+        }
     }
 
     /// Sample memory every few seconds for the whole session.
@@ -1713,7 +1728,6 @@ final class QemuRunner: ObservableObject {
     /// actually did.
     private func startSerialTailer() {
         let path = guestSerialLogPath
-        try? FileManager.default.removeItem(atPath: path)
 
         let t = Thread {
             var fd: Int32 = -1

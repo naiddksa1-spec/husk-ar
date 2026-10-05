@@ -55,50 +55,167 @@ struct tl_dex_file {
     tl_dex_class  **resolved_types;
 };
 
-/* LEB128 decoders */
-static uint32_t read_uleb128(const uint8_t **p)
+/* Validate untrusted DEX structure before forming table pointers or allocating.
+ * The interpreter is still experimental: this is not a bytecode verifier. */
+static bool dex_range(size_t size, uint32_t off, uint32_t count, size_t stride)
 {
-    uint32_t val = 0;
-    int shift = 0;
-    while (1) {
-        uint8_t b = *(*p)++;
-        val |= (uint32_t)(b & 0x7f) << shift;
-        shift += 7;
-        if (!(b & 0x80)) break;
-    }
-    return val;
+    return off <= size && count <= (size - off) / stride
+        && (!count || (off >= sizeof(dex_header) && off % 4 == 0));
 }
 
-__attribute__((unused)) static int32_t read_sleb128(const uint8_t **p)
+static bool dex_uleb(const uint8_t **p, const uint8_t *end, uint32_t *value)
 {
-    int32_t val = 0;
-    int shift = 0;
-    uint8_t b;
-    do {
-        b = *(*p)++;
-        val |= (int32_t)(b & 0x7f) << shift;
-        shift += 7;
-    } while (b & 0x80);
-    if (shift < 32 && (b & 0x40)) {
-        val |= ~0 << shift;
+    uint32_t result = 0;
+    for (unsigned i = 0; i < 5; i++) {
+        if (*p >= end) return false;
+        uint8_t b = *(*p)++;
+        if (i == 4 && (b & 0xf0)) return false;
+        result |= (uint32_t)(b & 0x7f) << (7 * i);
+        if (!(b & 0x80)) { *value = result; return true; }
     }
-    return val;
+    return false;
+}
+
+static uint32_t dex_u32(const uint8_t *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8)
+        | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static bool dex_code_valid(const uint8_t *data, size_t size, uint32_t off)
+{
+    if (!off) return true; /* native/abstract */
+    if (off % 4 || off > size || size - off < 16) return false;
+    const uint8_t *p = data + off;
+    uint32_t regs = p[0] | ((uint32_t)p[1] << 8);
+    uint32_t ins = p[2] | ((uint32_t)p[3] << 8);
+    uint32_t instructions = dex_u32(p + 12);
+    return regs <= 4096 && ins <= regs
+        && instructions <= (size - off - 16) / 2;
+}
+
+static bool dex_preflight(const uint8_t *data, size_t size)
+{
+    if (!data || size < sizeof(dex_header) || size > (64u << 20)
+        || memcmp(data, "dex\n", 4) || data[7] != 0
+        || memcmp(data + 4, "035", 3) < 0 || memcmp(data + 4, "039", 3) > 0) return false;
+    const dex_header *h = (const dex_header *)data;
+    if (h->type_ids_size > 65536 || h->proto_ids_size > 65536 || h->field_ids_size > 65536
+        || h->method_ids_size > 65536 || h->class_defs_size > 65536) return false;
+    if (h->header_size != sizeof(*h) || h->file_size != size || h->endian_tag != 0x12345678
+        || !dex_range(size, h->string_ids_off, h->string_ids_size, 4)
+        || !dex_range(size, h->type_ids_off, h->type_ids_size, 4)
+        || !dex_range(size, h->proto_ids_off, h->proto_ids_size, 12)
+        || !dex_range(size, h->field_ids_off, h->field_ids_size, 8)
+        || !dex_range(size, h->method_ids_off, h->method_ids_size, 8)
+        || !dex_range(size, h->class_defs_off, h->class_defs_size, 32)
+        || !dex_range(size, h->data_off, h->data_size, 1)) return false;
+    const uint8_t *end = data + size;
+    size_t string_budget = size * 4;
+    for (uint32_t i = 0; i < h->string_ids_size; i++) {
+        uint32_t off = dex_u32(data + h->string_ids_off + (size_t)i * 4), ignored;
+        if (off < h->data_off || off >= size) return false;
+        const uint8_t *p = data + off;
+        if (!dex_uleb(&p, end, &ignored)) return false;
+        size_t available = (size_t)(end - p);
+        if (available > (1u << 20)) available = 1u << 20;
+        if (available > string_budget) available = string_budget;
+        const uint8_t *nul = memchr(p, 0, available);
+        if (!nul) return false;
+        string_budget -= (size_t)(nul - p) + 1;
+    }
+    for (uint32_t i = 0; i < h->type_ids_size; i++)
+        if (dex_u32(data + h->type_ids_off + (size_t)i * 4) >= h->string_ids_size) return false;
+    for (uint32_t i = 0; i < h->proto_ids_size; i++) {
+        const uint8_t *p = data + h->proto_ids_off + (size_t)i * 12;
+        if (dex_u32(p) >= h->string_ids_size || dex_u32(p + 4) >= h->type_ids_size) return false;
+        uint32_t off = dex_u32(p + 8);
+        if (off) {
+            if (off % 4 || off > size || size - off < 4) return false;
+            uint32_t count = dex_u32(data + off);
+            if (count > (size - off - 4) / 2) return false;
+            for (uint32_t j = 0; j < count; j++) {
+                const uint8_t *t = data + off + 4 + (size_t)j * 2;
+                if ((uint32_t)(t[0] | ((uint32_t)t[1] << 8)) >= h->type_ids_size) return false;
+            }
+        }
+    }
+    for (unsigned table = 0; table < 2; table++) {
+        uint32_t count = table ? h->method_ids_size : h->field_ids_size;
+        uint32_t off = table ? h->method_ids_off : h->field_ids_off;
+        for (uint32_t i = 0; i < count; i++) {
+            const uint8_t *p = data + off + (size_t)i * 8;
+            uint32_t a = p[0] | ((uint32_t)p[1] << 8), b = p[2] | ((uint32_t)p[3] << 8);
+            if (a >= h->type_ids_size || b >= (table ? h->proto_ids_size : h->type_ids_size)
+                || dex_u32(p + 4) >= h->string_ids_size) return false;
+        }
+    }
+    size_t fields_left = h->field_ids_size, methods_left = h->method_ids_size;
+    for (uint32_t i = 0; i < h->class_defs_size; i++) {
+        const uint8_t *c = data + h->class_defs_off + (size_t)i * 32;
+        uint32_t super = dex_u32(c + 8), off = dex_u32(c + 24);
+        if (dex_u32(c) >= h->type_ids_size || (super != UINT32_MAX && super >= h->type_ids_size)) return false;
+        if (!off) continue;
+        if (off < h->data_off || off >= size) return false;
+        const uint8_t *p = data + off;
+        uint32_t counts[4];
+        for (unsigned k = 0; k < 4; k++) if (!dex_uleb(&p, end, &counts[k])) return false;
+        if ((uint64_t)counts[0] + counts[1] > fields_left
+            || (uint64_t)counts[2] + counts[3] > methods_left) return false;
+        fields_left -= (size_t)counts[0] + counts[1];
+        methods_left -= (size_t)counts[2] + counts[3];
+        for (unsigned k = 0; k < 4; k++) {
+            uint32_t idx = 0;
+            for (uint32_t j = 0; j < counts[k]; j++) {
+                uint32_t delta, flags, code;
+                if (!dex_uleb(&p, end, &delta) || delta > UINT32_MAX - idx
+                    || !dex_uleb(&p, end, &flags)) return false;
+                idx += delta;
+                if (idx >= (k < 2 ? h->field_ids_size : h->method_ids_size)) return false;
+                if (k >= 2 && (!dex_uleb(&p, end, &code) || !dex_code_valid(data, size, code))) return false;
+            }
+        }
+    }
+    return true;
+}
+
+/* LEB128 decoders */
+static uint32_t read_uleb128(const uint8_t **p, const uint8_t *end)
+{
+    uint32_t val = 0;
+    unsigned shift = 0;
+    for (unsigned i = 0; i < 5; i++) {
+        if (*p >= end) return 0;
+        uint8_t b = *(*p)++;
+        if (i == 4 && (b & 0x80 || (b & 0x7f) > 0x0f)) return 0;
+        val |= (uint32_t)(b & 0x7f) << shift;
+        if (!(b & 0x80)) return val;
+        shift += 7;
+    }
+    return 0;
 }
 
 static const char *dex_get_string(const tl_dex_file *dex, uint32_t idx)
 {
     if (!dex || idx >= dex->hdr->string_ids_size) return "";
-    uint32_t off = dex->string_ids[idx];
+    uint32_t off = ((const uint8_t *)dex->string_ids)[idx * 4]
+                 | ((uint32_t)((const uint8_t *)dex->string_ids)[idx * 4 + 1] << 8)
+                 | ((uint32_t)((const uint8_t *)dex->string_ids)[idx * 4 + 2] << 16)
+                 | ((uint32_t)((const uint8_t *)dex->string_ids)[idx * 4 + 3] << 24);
     if (off >= dex->size) return "";
     const uint8_t *p = dex->data + off;
-    (void)read_uleb128(&p); /* skip utf16_size */
+    uint32_t ignored;
+    if (!dex_uleb(&p, dex->data + dex->size, &ignored)
+        || !memchr(p, 0, (size_t)(dex->data + dex->size - p))) return "";
     return (const char *)p;
 }
 
 static const char *dex_get_type(const tl_dex_file *dex, uint32_t idx)
 {
     if (!dex || idx >= dex->hdr->type_ids_size) return "";
-    uint32_t str_idx = dex->type_ids[idx];
+    const uint8_t *t = (const uint8_t *)dex->type_ids + idx * 4;
+    uint32_t str_idx = (uint32_t)t[0] | ((uint32_t)t[1] << 8) |
+                       ((uint32_t)t[2] << 16) | ((uint32_t)t[3] << 24);
     return dex_get_string(dex, str_idx);
 }
 
@@ -126,6 +243,7 @@ static void dex_get_method_info(const tl_dex_file *dex, uint32_t idx,
     if (class_desc) *class_desc = dex_get_type(dex, c_idx);
     if (name)       *name       = dex_get_string(dex, n_idx);
     if (shorty) {
+        if (p_idx >= dex->hdr->proto_ids_size) { *shorty = "V"; return; }
         const uint8_t *pr = dex->proto_ids + p_idx * 12;
         uint32_t s_idx = (uint32_t)pr[0] | ((uint32_t)pr[1] << 8) | ((uint32_t)pr[2] << 16) | ((uint32_t)pr[3] << 24);
         *shorty = dex_get_string(dex, s_idx);
@@ -146,6 +264,10 @@ tl_dex_context *tl_dex_context_create(const char *apk_path, uint32_t *fb, int wi
     ctx->fb_height = height;
     ctx->class_capacity = 512;
     ctx->classes = calloc(ctx->class_capacity, sizeof(tl_dex_class *));
+    if (!ctx->classes || (apk_path && !ctx->apk_path)) {
+        free(ctx->classes); free((void *)ctx->apk_path);
+        pthread_mutex_destroy(&ctx->input_lock); free(ctx); return NULL;
+    }
     tl_framework_init(ctx);
     return ctx;
 }
@@ -190,11 +312,14 @@ static inline uint32_t class_hash_str(const char *s)
     return h;
 }
 
-static void context_add_class(tl_dex_context *ctx, tl_dex_class *clazz)
+static bool context_add_class(tl_dex_context *ctx, tl_dex_class *clazz)
 {
     if (ctx->num_classes >= ctx->class_capacity) {
-        ctx->class_capacity *= 2;
-        ctx->classes = realloc(ctx->classes, ctx->class_capacity * sizeof(tl_dex_class *));
+        int capacity = ctx->class_capacity ? ctx->class_capacity * 2 : 512;
+        tl_dex_class **grown = realloc(ctx->classes, (size_t)capacity * sizeof(tl_dex_class *));
+        if (!grown) return false;
+        ctx->classes = grown;
+        ctx->class_capacity = capacity;
     }
     ctx->classes[ctx->num_classes++] = clazz;
 
@@ -203,6 +328,7 @@ static void context_add_class(tl_dex_context *ctx, tl_dex_class *clazz)
         clazz->next_hash = ctx->class_hash[h];
         ctx->class_hash[h] = clazz;
     }
+    return true;
 }
 
 tl_dex_class *tl_dex_find_class(tl_dex_context *ctx, const char *descriptor)
@@ -319,6 +445,7 @@ static tl_dex_field *dex_resolve_field(tl_dex_context *ctx, tl_dex_file *dex, ui
     tl_dex_field *f = c ? tl_dex_find_field(c, fname, ftype) : NULL;
     if (!f) {
         f = calloc(1, sizeof(*f));
+        if (!f) return NULL;
         f->clazz = c;
         f->name = strdup(fname ? fname : "");
         f->type = strdup(ftype ? ftype : "");
@@ -382,6 +509,7 @@ static tl_dex_method *dex_resolve_method(tl_dex_context *ctx, tl_dex_file *dex, 
     if (!m) {
         tl_dex_native_func nfunc = dex_lookup_shim(class_desc, c, mname, shorty);
         m = calloc(1, sizeof(*m));
+        if (!m) return NULL;
         m->clazz = c;
         m->owner = class_desc ? strdup(class_desc) : NULL;
         m->name = strdup(mname ? mname : "");
@@ -394,12 +522,25 @@ static tl_dex_method *dex_resolve_method(tl_dex_context *ctx, tl_dex_file *dex, 
 
 /* ----------------------------------------------------------- DEX Loading */
 
+static bool dex_table_in_file(uint32_t off, uint32_t count, size_t width, size_t size)
+{
+    if ((uint64_t)off > size || (uint64_t)count > (SIZE_MAX / width)) return false;
+    return (uint64_t)count * width <= size - off;
+}
+
+static bool dex_code_in_file(size_t size, uint32_t off, uint32_t insns_size)
+{
+    if ((uint64_t)off > size || size - off < 16) return false;
+    return (uint64_t)insns_size <= (size - off - 16) / 2;
+}
+
 static tl_dex_file *parse_dex_buffer(tl_dex_context *ctx, uint8_t *data, size_t size)
 {
-    if (size < sizeof(dex_header)) return NULL;
-    if (memcmp(data, "dex\n", 4) != 0) return NULL;
+    if (!ctx || !dex_preflight(data, size)) return NULL;
 
     const dex_header *hdr = (const dex_header *)data;
+    int initial_classes = ctx->num_classes;
+    tl_dex_class *pending = NULL;
     tl_dex_file *dex = calloc(1, sizeof(*dex));
     if (!dex) return NULL;
     dex->data = data;
@@ -415,6 +556,9 @@ static tl_dex_file *parse_dex_buffer(tl_dex_context *ctx, uint8_t *data, size_t 
     dex->resolved_fields  = calloc(hdr->field_ids_size, sizeof(void *));
     dex->resolved_methods = calloc(hdr->method_ids_size, sizeof(void *));
     dex->resolved_types   = calloc(hdr->type_ids_size, sizeof(void *));
+    if ((hdr->field_ids_size && !dex->resolved_fields)
+        || (hdr->method_ids_size && !dex->resolved_methods)
+        || (hdr->type_ids_size && !dex->resolved_types)) goto invalid;
 
     for (uint32_t i = 0; i < hdr->class_defs_size; i++) {
         const uint8_t *cd = dex->class_defs + i * 32;
@@ -424,6 +568,8 @@ static tl_dex_file *parse_dex_buffer(tl_dex_context *ctx, uint8_t *data, size_t 
         uint32_t class_data_off = (uint32_t)cd[24] | ((uint32_t)cd[25] << 8) | ((uint32_t)cd[26] << 16) | ((uint32_t)cd[27] << 24);
 
         tl_dex_class *c = calloc(1, sizeof(*c));
+        if (!c) goto invalid;
+        pending = c;
         c->ctx = ctx;
         c->dex = dex;
         c->descriptor = dex_get_type(dex, class_idx);
@@ -432,25 +578,35 @@ static tl_dex_file *parse_dex_buffer(tl_dex_context *ctx, uint8_t *data, size_t 
 
         if (class_data_off != 0 && class_data_off < size) {
             const uint8_t *p = dex->data + class_data_off;
-            uint32_t static_fields_count   = read_uleb128(&p);
-            uint32_t instance_fields_count = read_uleb128(&p);
-            uint32_t direct_methods_count   = read_uleb128(&p);
-            uint32_t virtual_methods_count  = read_uleb128(&p);
+            uint32_t static_fields_count   = read_uleb128(&p, dex->data + dex->size);
+            uint32_t instance_fields_count = read_uleb128(&p, dex->data + dex->size);
+            uint32_t direct_methods_count   = read_uleb128(&p, dex->data + dex->size);
+            uint32_t virtual_methods_count  = read_uleb128(&p, dex->data + dex->size);
+            if (static_fields_count > 1000000 || instance_fields_count > 1000000
+                || direct_methods_count > 1000000 || virtual_methods_count > 1000000
+                || static_fields_count > UINT32_MAX - instance_fields_count
+                || direct_methods_count > UINT32_MAX - virtual_methods_count) {
+                free(c);
+                continue;
+            }
 
             c->num_fields = static_fields_count + instance_fields_count;
             c->num_static_fields = static_fields_count;
             c->num_instance_fields = instance_fields_count;
             if (c->num_fields > 0) {
                 c->fields = calloc(c->num_fields, sizeof(tl_dex_field));
+                if (!c->fields) { free(c); continue; }
             }
             if (static_fields_count > 0) {
                 c->static_values = calloc(static_fields_count, sizeof(tl_dex_val));
+                if (!c->static_values) { free(c->fields); free(c); continue; }
             }
+            if ((c->num_fields && !c->fields) || (static_fields_count && !c->static_values)) goto invalid;
 
             uint32_t fid = 0;
             for (uint32_t f = 0; f < static_fields_count; f++) {
-                fid += read_uleb128(&p);
-                uint32_t flags = read_uleb128(&p);
+                fid += read_uleb128(&p, dex->data + dex->size);
+                uint32_t flags = read_uleb128(&p, dex->data + dex->size);
                 const char *fname = NULL, *ftype = NULL;
                 dex_get_field_info(dex, fid, NULL, &fname, &ftype);
                 c->fields[f] = (tl_dex_field){
@@ -460,8 +616,8 @@ static tl_dex_file *parse_dex_buffer(tl_dex_context *ctx, uint8_t *data, size_t 
             }
             fid = 0;
             for (uint32_t f = 0; f < instance_fields_count; f++) {
-                fid += read_uleb128(&p);
-                uint32_t flags = read_uleb128(&p);
+                fid += read_uleb128(&p, dex->data + dex->size);
+                uint32_t flags = read_uleb128(&p, dex->data + dex->size);
                 const char *fname = NULL, *ftype = NULL;
                 dex_get_field_info(dex, fid, NULL, &fname, &ftype);
                 c->fields[static_fields_count + f] = (tl_dex_field){
@@ -473,12 +629,14 @@ static tl_dex_file *parse_dex_buffer(tl_dex_context *ctx, uint8_t *data, size_t 
             c->num_methods = direct_methods_count + virtual_methods_count;
             if (c->num_methods > 0) {
                 c->methods = calloc(c->num_methods, sizeof(tl_dex_method));
+                if (!c->methods) { free(c->static_values); free(c->fields); free(c); continue; }
             }
+            if (c->num_methods && !c->methods) goto invalid;
             uint32_t mid = 0;
             for (uint32_t m = 0; m < direct_methods_count; m++) {
-                mid += read_uleb128(&p);
-                uint32_t flags = read_uleb128(&p);
-                uint32_t code_off = read_uleb128(&p);
+                mid += read_uleb128(&p, dex->data + dex->size);
+                uint32_t flags = read_uleb128(&p, dex->data + dex->size);
+                uint32_t code_off = read_uleb128(&p, dex->data + dex->size);
                 const char *mname = NULL, *shorty = NULL;
                 dex_get_method_info(dex, mid, NULL, &mname, &shorty);
 
@@ -487,21 +645,22 @@ static tl_dex_file *parse_dex_buffer(tl_dex_context *ctx, uint8_t *data, size_t 
                 meth->name = mname;
                 meth->shorty = shorty;
                 meth->access_flags = flags;
-                if (code_off != 0 && code_off + 16 <= size) {
+                if (code_off != 0 && code_off <= size && size - code_off >= 16) {
                     const uint8_t *cp = dex->data + code_off;
                     meth->registers_size = (uint16_t)cp[0] | ((uint16_t)cp[1] << 8);
                     meth->ins_size       = (uint16_t)cp[2] | ((uint16_t)cp[3] << 8);
                     meth->outs_size      = (uint16_t)cp[4] | ((uint16_t)cp[5] << 8);
                     meth->insns_size     = (uint32_t)cp[12] | ((uint32_t)cp[13] << 8) | ((uint32_t)cp[14] << 16) | ((uint32_t)cp[15] << 24);
-                    meth->insns          = (const uint16_t *)(cp + 16);
+                    if (dex_code_in_file(dex->size, code_off, meth->insns_size))
+                        meth->insns = (const uint16_t *)(cp + 16);
                 }
                 if (mid < hdr->method_ids_size) dex->resolved_methods[mid] = meth;
             }
             mid = 0;
             for (uint32_t m = 0; m < virtual_methods_count; m++) {
-                mid += read_uleb128(&p);
-                uint32_t flags = read_uleb128(&p);
-                uint32_t code_off = read_uleb128(&p);
+                mid += read_uleb128(&p, dex->data + dex->size);
+                uint32_t flags = read_uleb128(&p, dex->data + dex->size);
+                uint32_t code_off = read_uleb128(&p, dex->data + dex->size);
                 const char *mname = NULL, *shorty = NULL;
                 dex_get_method_info(dex, mid, NULL, &mname, &shorty);
 
@@ -510,20 +669,86 @@ static tl_dex_file *parse_dex_buffer(tl_dex_context *ctx, uint8_t *data, size_t 
                 meth->name = mname;
                 meth->shorty = shorty;
                 meth->access_flags = flags;
-                if (code_off != 0 && code_off + 16 <= size) {
+                if (code_off != 0 && code_off <= size && size - code_off >= 16) {
                     const uint8_t *cp = dex->data + code_off;
                     meth->registers_size = (uint16_t)cp[0] | ((uint16_t)cp[1] << 8);
                     meth->ins_size       = (uint16_t)cp[2] | ((uint16_t)cp[3] << 8);
                     meth->outs_size      = (uint16_t)cp[4] | ((uint16_t)cp[5] << 8);
                     meth->insns_size     = (uint32_t)cp[12] | ((uint32_t)cp[13] << 8) | ((uint32_t)cp[14] << 16) | ((uint32_t)cp[15] << 24);
-                    meth->insns          = (const uint16_t *)(cp + 16);
+                    if (dex_code_in_file(dex->size, code_off, meth->insns_size))
+                        meth->insns = (const uint16_t *)(cp + 16);
                 }
                 if (mid < hdr->method_ids_size) dex->resolved_methods[mid] = meth;
             }
         }
-        context_add_class(ctx, c);
+        if (!context_add_class(ctx, c)) goto invalid;
+        pending = NULL;
     }
     return dex;
+invalid:
+    if (pending) {
+        free(pending->fields); free(pending->methods); free(pending->static_values); free(pending);
+    }
+    while (ctx->num_classes > initial_classes) {
+        tl_dex_class *c = ctx->classes[--ctx->num_classes];
+        if (c->descriptor) ctx->class_hash[class_hash_str(c->descriptor) % TL_DEX_CLASS_HASH_SIZE] = c->next_hash;
+        free(c->fields); free(c->methods); free(c->static_values); free(c);
+        ctx->classes[ctx->num_classes] = NULL;
+    }
+    free(dex->resolved_fields); free(dex->resolved_methods); free(dex->resolved_types); free(dex);
+    return NULL;
+}
+
+/* Runtime operand guard for the formats supported below. This rejects reserved
+ * opcodes and prevents truncated instruction/register reads before dispatch. */
+static bool dex_instruction_valid(const uint16_t *p, size_t remaining, unsigned regs)
+{
+    if (!remaining) return false;
+    unsigned op = p[0] & 255, b = p[0] >> 8, width = 1, format = 0;
+    if (op == 0) return b == 0;
+    if (op == 0x0e || op == 0x28) return true;
+    if (op == 0x29) return remaining >= 2;
+    if (op == 0x2a) return remaining >= 3;
+    if (op == 0x01 || op == 0x04 || op == 0x07 || op == 0x21
+        || (op >= 0x7b && op <= 0x8f) || (op >= 0xb0 && op <= 0xcf)) format = 2;
+    else if (op == 0x02 || op == 0x05 || op == 0x08) { width = 2; format = 3; }
+    else if (op == 0x03 || op == 0x06 || op == 0x09) { width = 3; format = 4; }
+    else if (op == 0x12) { format = 5; }
+    else if ((op >= 0x0a && op <= 0x11) || op == 0x1d || op == 0x1e || op == 0x27) format = 1;
+    else if (op == 0x13 || op == 0x15 || op == 0x16 || op == 0x19 || op == 0x1a
+        || op == 0x1c || op == 0x1f || op == 0x22 || (op >= 0x38 && op <= 0x3d)
+        || (op >= 0x60 && op <= 0x6d)) { width = 2; format = 1; }
+    else if (op == 0x14 || op == 0x17 || op == 0x1b || op == 0x26 || op == 0x2b || op == 0x2c) { width = 3; format = 1; }
+    else if (op == 0x18) { width = 5; format = 1; }
+    else if (op == 0x20 || op == 0x23 || (op >= 0x32 && op <= 0x37)
+        || (op >= 0x52 && op <= 0x5f) || (op >= 0xd0 && op <= 0xd7)) { width = 2; format = 2; }
+    else if ((op >= 0x2d && op <= 0x31) || (op >= 0x44 && op <= 0x51)
+        || (op >= 0x90 && op <= 0xaf)) { width = 2; format = 6; }
+    else if (op >= 0xd8 && op <= 0xe2) { width = 2; format = 7; }
+    else if (op == 0x24 || (op >= 0x6e && op <= 0x72)) { width = 3; format = 8; }
+    else if (op == 0x25 || (op >= 0x74 && op <= 0x78)) { width = 3; format = 9; }
+    else return false;
+    if (remaining < width) return false;
+    switch (format) {
+    case 1: return b < regs;
+    case 2: return (b & 15) < regs && (b >> 4) < regs;
+    case 3: return b < regs && p[1] < regs;
+    case 4: return p[1] < regs && p[2] < regs;
+    case 5: return (b & 15) < regs;
+    case 6: return b < regs && (p[1] & 255) < regs && (p[1] >> 8) < regs;
+    case 7: return b < regs && (p[1] & 255) < regs;
+    case 8: {
+        unsigned count = b >> 4;
+        if (count > 5) return false;
+        for (unsigned i = 0; i < count; i++) {
+            unsigned r = i < 4 ? ((p[2] >> (4 * i)) & 15) : (b & 15);
+            if (r >= regs) return false;
+        }
+        return true;
+    }
+    case 9: return p[2] <= regs && b <= regs - p[2];
+    default: return false;
+    }
 }
 
 static void dex_log(const char *fmt, ...)
@@ -601,11 +826,13 @@ bool tl_dex_load_apk(tl_dex_context *ctx, const char *apk_path)
 tl_dex_object *tl_dex_alloc_object(tl_dex_class *clazz)
 {
     tl_dex_object *obj = calloc(1, sizeof(*obj));
+    if (!obj) return NULL;
     obj->clazz = clazz;
     /* The whole inherited layout, not just this class's own fields. */
     int nfields = clazz ? clazz->instance_size : 16;
     if (nfields < 16) nfields = 16;
-    obj->fields = calloc(nfields, sizeof(tl_dex_val));
+    obj->fields = calloc((size_t)nfields, sizeof(tl_dex_val));
+    if (!obj->fields) { free(obj); return NULL; }
     obj->nfields = (uint32_t)nfields;
     return obj;
 }
@@ -613,11 +840,14 @@ tl_dex_object *tl_dex_alloc_object(tl_dex_class *clazz)
 tl_dex_object *tl_dex_alloc_array(tl_dex_class *elem_class, uint32_t length, uint32_t elem_size)
 {
     tl_dex_object *obj = calloc(1, sizeof(*obj));
+    if (!obj || (elem_size && length > SIZE_MAX / elem_size)) { free(obj); return NULL; }
     obj->clazz = elem_class;
     obj->flags = TL_KIND_ARRAY;
     obj->array.length = length;
     obj->array.elem_size = elem_size ? elem_size : 4;
+    if (length > SIZE_MAX / obj->array.elem_size) { free(obj); return NULL; }
     obj->array.elements = calloc(length ? length : 1, obj->array.elem_size);
+    if (!obj->array.elements) { free(obj); return NULL; }
     return obj;
 }
 
@@ -818,6 +1048,7 @@ bool tl_dex_invoke(tl_dex_context *ctx, tl_dex_method *method, tl_dex_val *args,
     uint16_t reg_count = method->registers_size;
     if (reg_count < method->ins_size) reg_count = method->ins_size;
     tl_dex_val *v = calloc(reg_count + 8, sizeof(tl_dex_val));
+    if (!v) return false;
 
     /* Map incoming parameters to the upper registers [reg_count - ins_size .. reg_count - 1] */
     uint16_t in_start = reg_count - method->ins_size;
@@ -835,6 +1066,10 @@ bool tl_dex_invoke(tl_dex_context *ctx, tl_dex_method *method, tl_dex_val *args,
 #endif
 
     while (pc < method->insns_size) {
+        if (!dex_instruction_valid(insns + pc, method->insns_size - pc, reg_count)) {
+            success = false;
+            break;
+        }
         uint16_t inst = insns[pc];
         uint8_t opcode = inst & 0xff;
         uint8_t op_b = (inst >> 8) & 0xff;
@@ -1527,6 +1762,7 @@ bool tl_dex_invoke(tl_dex_context *ctx, tl_dex_method *method, tl_dex_val *args,
                 }
 
                 tl_dex_val *call_args = calloc(count ? count : 1, sizeof(tl_dex_val));
+                if (!call_args) { success = false; pc = method->insns_size; break; }
                 for (int i = 0; i < count; i++) {
                     call_args[i] = v[first_reg + i];
                 }
@@ -1675,6 +1911,7 @@ bool tl_dex_invoke(tl_dex_context *ctx, tl_dex_method *method, tl_dex_val *args,
     }
 
 done:
+    if (pc > method->insns_size) success = false;
     free(v);
     return success;
 }

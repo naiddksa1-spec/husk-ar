@@ -4,33 +4,50 @@ import UIKit
 
 /// Husk's visual vocabulary, in one place so every screen agrees.
 ///
-/// Dark is the design: a near-black page with surfaces lifted a few points out
-/// of it. Light is the same arrangement turned over — a pale page with white
-/// cards on it, edged by the same hairline — so depth still reads as "lifted",
-/// not as grey boxes. Every colour here is resolved per appearance, which is
-/// why none of them are plain `Color(red:green:blue:)` any more.
+/// Madar's iPhone-inspired host interface: native typography, grouped system
+/// pages and restrained frosted chrome. Not an official future iPhone design.
 ///
 /// Which appearance is shown is the user's choice (`Theme.Appearance`), and it
 /// defaults to dark, so nobody who already has the app sees it change.
 enum Theme {
-    /// ألوان نظام iOS الأصلية — الواجهة تتبع نظام آبل مباشرة.
-    static let bgUI = UIColor.systemBackground
+    /// Graphite, porcelain and restrained iOS blue.
+    /// System Arabic/SF typography keeps RTL, shaping and Dynamic Type native.
+    private static func adaptive(_ light: UInt32, _ dark: UInt32) -> UIColor {
+        UIColor { traits in
+            let hex = traits.userInterfaceStyle == .dark ? dark : light
+            return UIColor(red: CGFloat((hex >> 16) & 255) / 255,
+                           green: CGFloat((hex >> 8) & 255) / 255,
+                           blue: CGFloat(hex & 255) / 255, alpha: 1)
+        }
+    }
+
+    static let bgUI = adaptive(0xF2F2F7, 0x0C0D12)
     static let bg = Color(uiColor: bgUI)
     /// Cards, rows, anything holding content.
-    static let surface = Color(uiColor: .secondarySystemBackground)
+    static let surfaceUI = adaptive(0xFFFFFF, 0x1C1D24)
+    static let surface = Color(uiColor: surfaceUI)
     /// One step further up: chips, icon wells, the things that sit on a card.
-    static let surfaceHigh = Color(uiColor: .tertiarySystemBackground)
+    static let surfaceHighUI = adaptive(0xE9E9F0, 0x2B2C35)
+    static let surfaceHigh = Color(uiColor: surfaceHighUI)
     /// The edge that separates a surface from the page.
-    static let hairlineUI = UIColor.separator
+    static let hairlineUI = adaptive(0xDADAE1, 0x3A3B45)
     static let hairline = Color(uiColor: hairlineUI)
 
-    static let textUI = UIColor.label
+    static let textUI = adaptive(0x17181D, 0xF5F5FA)
     static let text = Color(uiColor: textUI)
-    static let textDim = Color(uiColor: .secondaryLabel)
+    static let textDimUI = adaptive(0x61616E, 0xC7C7D2)
+    static let textDim = Color(uiColor: textDimUI)
 
-    /// لون التمييز الأصلي للنظام.
-    static let accent = Color.accentColor
-    static let accentSoft = Color.accentColor.opacity(0.16)
+    static let accentUI = adaptive(0x075CCC, 0xB5D4FF)
+    static let accent = Color(uiColor: accentUI)
+    /// White-on-blue controls retain contrast in both appearances.
+    static let action = Color(red: 0.03, green: 0.34, blue: 0.78)
+    static let accentSoft = accent.opacity(0.13)
+    static let champagne = Color(uiColor: adaptive(0x646176, 0xD2CDDF))
+    static let onAction = Color.white
+    static let actionGradient = LinearGradient(
+        colors: [Color(red: 0.22, green: 0.40, blue: 0.88), action],
+        startPoint: .topLeading, endPoint: .bottomTrailing)
     /// Darker on a light page: the dark-mode green all but vanishes on white.
     static let good = Color(uiColor: .systemGreen)
     /// What a floating thing casts. A light page wants far less of it.
@@ -83,20 +100,111 @@ enum Theme {
         }
     }
 
-    static let cardCorner: CGFloat = 18
-    static let rowCorner: CGFloat = 14
+    static let cardCorner: CGFloat = 22
+    static let rowCorner: CGFloat = 16
 
-    static var backdrop: some View { bg.ignoresSafeArea() }
+    static var backdrop: some View {
+        LinearGradient(colors: [surface, bg, bg],
+                       startPoint: .topLeading, endPoint: .bottomTrailing)
+            .ignoresSafeArea()
+    }
 
+    /// Fixed, vector wallpaper: ambient depth without per-frame effects.
+    /// This lives behind the launcher only, never over a running Android surface.
+    static var homeWallpaper: some View {
+        GeometryReader { geometry in
+            ZStack {
+                LinearGradient(colors: [Color(red: 0.06, green: 0.07, blue: 0.13),
+                                         Color(red: 0.18, green: 0.15, blue: 0.29),
+                                         Color(red: 0.10, green: 0.13, blue: 0.24)],
+                               startPoint: .topLeading, endPoint: .bottomTrailing)
+                RoundedRectangle(cornerRadius: geometry.size.width * 0.60, style: .continuous)
+                    .fill(LinearGradient(colors: [Color(red: 0.83, green: 0.72, blue: 0.79),
+                                                  Color(red: 0.32, green: 0.29, blue: 0.47),
+                                                  Color(red: 0.12, green: 0.14, blue: 0.24)],
+                                         startPoint: .top, endPoint: .bottom))
+                    .frame(width: geometry.size.width * 1.4, height: geometry.size.height * 0.85)
+                    .rotationEffect(.degrees(-36))
+                    .offset(x: geometry.size.width * 0.43, y: geometry.size.height * 0.12)
+                RoundedRectangle(cornerRadius: geometry.size.width * 0.55, style: .continuous)
+                    .fill(LinearGradient(colors: [Color(red: 0.49, green: 0.59, blue: 0.75),
+                                                  Color(red: 0.21, green: 0.28, blue: 0.44),
+                                                  Color(red: 0.09, green: 0.10, blue: 0.18)],
+                                         startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .frame(width: geometry.size.width * 1.30, height: geometry.size.height * 0.90)
+                    .rotationEffect(.degrees(34))
+                    .offset(x: -geometry.size.width * 0.36, y: geometry.size.height * 0.44)
+                LinearGradient(colors: [.black.opacity(0.05), .black.opacity(0.28)],
+                               startPoint: .top, endPoint: .bottom)
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .clipped()
+        }
+        .ignoresSafeArea()
+        .accessibilityHidden(true)
+    }
+
+    /// Style UIKit-backed navigation, tabs and form rows without replacing
+    /// navigation stacks or touching the mounted guest rendering surface.
+    @MainActor static func configureChrome() {
+        let bar = UITabBarAppearance()
+        bar.configureWithOpaqueBackground()
+        bar.backgroundColor = bgUI
+        bar.shadowColor = hairlineUI
+        for item in [bar.stackedLayoutAppearance, bar.inlineLayoutAppearance,
+                     bar.compactInlineLayoutAppearance] {
+            item.normal.iconColor = textDimUI
+            item.normal.titleTextAttributes = [.foregroundColor: textDimUI]
+            item.selected.iconColor = accentUI
+            item.selected.titleTextAttributes = [.foregroundColor: accentUI]
+        }
+        UITabBar.appearance().standardAppearance = bar
+        UITabBar.appearance().scrollEdgeAppearance = bar
+        let navigation = UINavigationBarAppearance()
+        navigation.configureWithOpaqueBackground()
+        navigation.backgroundColor = bgUI
+        navigation.shadowColor = .clear
+        navigation.titleTextAttributes = [.foregroundColor: textUI]
+        navigation.largeTitleTextAttributes = [.foregroundColor: textUI]
+        UINavigationBar.appearance().standardAppearance = navigation
+        UINavigationBar.appearance().scrollEdgeAppearance = navigation
+        UINavigationBar.appearance().compactAppearance = navigation
+        UITableView.appearance().backgroundColor = bgUI
+        UITableViewCell.appearance().backgroundColor = surfaceUI
+    }
+
+}
+
+/// Use platform Material, with a solid fallback for Reduce Transparency.
+/// Limited to small controls, not repeated app tiles or Android's renderer.
+struct MadarGlass: ViewModifier {
+    var radius: CGFloat = 24
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                if reduceTransparency {
+                    RoundedRectangle(cornerRadius: radius, style: .continuous).fill(Theme.surface)
+                } else {
+                    RoundedRectangle(cornerRadius: radius, style: .continuous).fill(.regularMaterial)
+                }
+            }
+            .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .stroke(Theme.hairline.opacity(0.45), lineWidth: 0.6))
+    }
 }
 
 
 extension View {
+    func madarGlass(radius: CGFloat = 24) -> some View {
+        modifier(MadarGlass(radius: radius))
+    }
     /// The app's one container: a lifted surface with a hairline edge.
     @ViewBuilder
     func huskCard<S: Shape>(_ shape: S, high: Bool = false) -> some View {
         self.background(high ? Theme.surfaceHigh : Theme.surface, in: shape)
-            .overlay(shape.stroke(Theme.hairline, lineWidth: 0.5))
+            .overlay(shape.stroke(Theme.hairline.opacity(0.7), lineWidth: 0.7))
     }
 
     func huskCard(high: Bool = false) -> some View {
@@ -115,7 +223,7 @@ extension View {
     /// Always the dark one, whatever the app's appearance: it floats over a
     /// guest that is mostly black, and the controls on it are drawn in white.
     func huskPanel<S: Shape>(_ shape: S) -> some View {
-        self.background(Theme.surface.opacity(0.94), in: shape)
+        self.background(Color(red: 0.13, green: 0.12, blue: 0.14).opacity(0.97), in: shape)
             .overlay(shape.stroke(Color.white.opacity(0.10), lineWidth: 0.5))
             .environment(\.colorScheme, .dark)
     }
@@ -134,28 +242,34 @@ extension Font {
 /// The one action a screen is for.
 struct PrimaryButtonStyle: ButtonStyle {
     var enabled = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(enabled ? .white : Theme.textDim)
+            .font(.headline)
+            .foregroundStyle(enabled ? Theme.onAction : Theme.textDim)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 15)
-            .background(enabled ? Theme.accent : Theme.surfaceHigh,
-                        in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+            .padding(.horizontal, 18).padding(.vertical, 17)
+            .background {
+                RoundedRectangle(cornerRadius: Theme.rowCorner, style: .continuous)
+                    .fill(enabled ? Theme.action : Theme.surfaceHigh)
+            }
+            .overlay(RoundedRectangle(cornerRadius: Theme.rowCorner, style: .continuous)
+                .stroke(Color.white.opacity(enabled ? 0.12 : 0), lineWidth: 1))
             .opacity(configuration.isPressed ? 0.85 : 1)
-            .scaleEffect(configuration.isPressed ? 0.985 : 1)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 
 /// A card that is also a button: it moves a little under the finger.
 struct CardButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
             .opacity(configuration.isPressed ? 0.9 : 1)
-            .animation(.easeOut(duration: 0.14), value: configuration.isPressed)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: configuration.isPressed)
     }
 }
 
@@ -170,10 +284,25 @@ struct CircleButton: View {
             Image(systemName: systemImage)
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(active ? .white : Theme.text)
-                .frame(width: 36, height: 36)
-                .background(active ? Theme.accent : Theme.surfaceHigh, in: Circle())
+                .frame(width: 44, height: 44)
+                .background(active ? Theme.action : Theme.surfaceHigh,
+                            in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Theme.champagne.opacity(0.18), lineWidth: 0.8))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(CardButtonStyle())
+        .accessibilityLabel(accessibilityTitle)
+    }
+
+    private var accessibilityTitle: String {
+        switch systemImage {
+        case "plus": return "إضافة"
+        case "rectangle.inset.filled": return "عرض أندرويد"
+        case "arrow.clockwise": return "تحديث"
+        case "chevron.left": return "رجوع"
+        case "magnifyingglass": return "بحث"
+        default: return systemImage
+        }
     }
 }
 
@@ -205,12 +334,13 @@ struct Chip: View {
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(selected ? .white : Theme.textDim)
-                .padding(.horizontal, 16).padding(.vertical, 8)
-                .background(selected ? Theme.accent : Theme.surfaceHigh, in: Capsule())
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(selected ? Theme.onAction : Theme.textDim)
+                .padding(.horizontal, 17).padding(.vertical, 11)
+                .background(selected ? Theme.action : Theme.surfaceHigh, in: Capsule())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
@@ -259,21 +389,16 @@ struct HuskRow: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            Image(systemName: systemImage)
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(tint)
-                .frame(width: 34, height: 34)
-                .background(Theme.surfaceHigh,
-                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            HuskGlyph(systemImage: systemImage, tint: glyphTint)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 15, weight: .medium))
+                    .font(.body.weight(.medium))
                     .foregroundStyle(tint)
                 if let subtitle {
                     Text(subtitle)
-                        .font(.system(size: 12))
+                        .font(.subheadline)
                         .foregroundStyle(Theme.textDim)
-                        .lineLimit(1)
+                        .lineLimit(2)
                 }
             }
             Spacer(minLength: 8)
@@ -283,8 +408,37 @@ struct HuskRow: View {
                     .foregroundStyle(Theme.textDim.opacity(0.7))
             }
         }
-        .padding(.horizontal, 14).padding(.vertical, 12)
+        .padding(.horizontal, 16).padding(.vertical, 15)
         .contentShape(Rectangle())
+    }
+
+    private var glyphTint: Color {
+        if systemImage.contains("folder") || systemImage.contains("externaldrive") { return Theme.champagne }
+        if systemImage.contains("globe") || systemImage.contains("network") { return Theme.good }
+        return Theme.accent
+    }
+}
+
+/// Soft enamel wells give navigation symbols character while keeping familiar
+/// SF silhouettes. Third-party app artwork is never replaced.
+struct HuskGlyph: View {
+    let systemImage: String
+    var tint: Color = Theme.accent
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 19, weight: .semibold))
+            .symbolRenderingMode(.hierarchical)
+            .foregroundStyle(tint)
+            .frame(width: 36, height: 36)
+            .background {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(LinearGradient(colors: [tint.opacity(0.22), tint.opacity(0.12)],
+                                         startPoint: .topLeading, endPoint: .bottomTrailing))
+            }
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(tint.opacity(0.24), lineWidth: 0.7))
+            .accessibilityHidden(true)
     }
 }
 
@@ -333,7 +487,7 @@ struct StatusPill: View {
 
     var body: some View {
         Label(text, systemImage: systemImage)
-            .font(.system(size: 12, weight: .medium))
+            .font(.footnote.weight(.semibold))
             .padding(.horizontal, 10).padding(.vertical, 5)
             .background(tint.opacity(0.16), in: Capsule())
             .foregroundStyle(tint)
@@ -351,15 +505,16 @@ struct EmptyState: View {
     var body: some View {
         VStack(spacing: 14) {
             Image(systemName: systemImage)
-                .font(.system(size: 30, weight: .light))
-                .foregroundStyle(Theme.accent)
-                .frame(width: 64, height: 64)
-                .background(Theme.accentSoft, in: Circle())
+                .font(.system(size: 32, weight: .light))
+                .foregroundStyle(Theme.champagne)
+                .frame(width: 88, height: 88)
+                .background(Theme.surfaceHigh,
+                            in: RoundedRectangle(cornerRadius: 30, style: .continuous))
             Text(title)
-                .font(.system(size: 18, weight: .semibold))
+                .font(.title2.weight(.semibold))
                 .foregroundStyle(Theme.text)
             Text(message)
-                .font(.system(size: 14))
+                .font(.body)
                 .foregroundStyle(Theme.textDim)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 28)
@@ -466,30 +621,88 @@ struct HuskHeader<Trailing: View>: View {
     @ViewBuilder var trailing: Trailing
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 10) {
                 if let back {
                     Button(action: back) {
                         Image(systemName: "chevron.left")
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(Theme.text)
-                            .frame(width: 36, height: 36)
+                            .frame(width: 46, height: 46)
                             .background(Theme.surfaceHigh, in: Circle())
                     }
                     .buttonStyle(.plain)
                 } else if mark {
-                    HuskMark(size: 32)
+                    HStack(spacing: 10) {
+                        HuskMark(size: 40)
+                        Text("MADAR")
+                            .font(.system(size: 14, weight: .semibold))
+                            .tracking(3)
+                            .foregroundStyle(Theme.champagne)
+                    }
                 }
                 Spacer(minLength: 8)
                 trailing
             }
             if let title {
                 Text(title)
-                    .font(.system(size: 32, weight: .bold))
+                    .font(.largeTitle.weight(.bold))
                     .foregroundStyle(Theme.text)
             }
         }
         .padding(.top, 4)
+    }
+}
+
+/// Optional brand motif for legacy surfaces. The launcher uses its wallpaper
+/// and clock rather than repeated decorative portal framing.
+struct PortalMotif: View {
+    var body: some View {
+        ZStack {
+            ForEach(0..<3, id: \.self) { index in
+                RoundedRectangle(cornerRadius: 42 - CGFloat(index) * 6, style: .continuous)
+                    .stroke(Theme.champagne.opacity(0.30 - Double(index) * 0.06), lineWidth: 1)
+                    .padding(CGFloat(index) * 12)
+            }
+            HuskMark(size: 80)
+        }
+        .frame(width: 116, height: 142)
+        .rotationEffect(.degrees(-9))
+        .accessibilityHidden(true)
+    }
+}
+
+struct HuskSpotlight: View {
+    let eyebrow: String
+    let title: String
+    let detail: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(eyebrow)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Theme.champagne)
+                Text(title)
+                    .font(.title2.weight(.bold))
+                    .foregroundStyle(Theme.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(detail)
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.textDim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            HuskMark(size: 64).accessibilityHidden(true)
+        }
+        .padding(22)
+        .background {
+            RoundedRectangle(cornerRadius: 30, style: .continuous)
+                .fill(LinearGradient(colors: [Theme.surfaceHigh, Theme.surface],
+                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+        }
+        .overlay(RoundedRectangle(cornerRadius: 30, style: .continuous)
+            .stroke(Theme.hairline.opacity(0.35), lineWidth: 0.8))
     }
 }
 

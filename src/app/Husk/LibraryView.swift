@@ -14,7 +14,7 @@ struct LibraryView: View {
     @State private var importing = false
     @State private var showLogs = false
 
-    private let columns = [GridItem(.adaptive(minimum: 92, maximum: 120), spacing: 24)]
+    private let columns = [GridItem(.adaptive(minimum: 78, maximum: 130), spacing: 18)]
 
     var body: some View {
         NavigationStack {
@@ -25,7 +25,8 @@ struct LibraryView: View {
                     grid
                 }
             }
-            .navigationTitle("Husk")
+            .background { Theme.backdrop }
+            .navigationTitle("مكتبة التطبيقات")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button { importing = true } label: { Image(systemName: "plus") }
@@ -60,14 +61,17 @@ struct LibraryView: View {
                         bridge.launch(package: app.package)
                         running = app
                     } label: {
-                        VStack(spacing: 8) {
+                        VStack(spacing: 12) {
                             icon(for: app)
                             Text(app.name)
-                                .font(.caption)
+                                .font(.subheadline.weight(.semibold))
                                 .lineLimit(2)
                                 .multilineTextAlignment(.center)
                                 .foregroundStyle(.primary)
                         }
+                        .frame(maxWidth: .infinity)
+                        .padding(16)
+                        .madarGlass(radius: 20)
                     }
                     .buttonStyle(.plain)
                 }
@@ -106,21 +110,22 @@ struct LibraryView: View {
         }
         .frame(width: 66, height: 66)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .shadow(color: .black.opacity(0.18), radius: 5, y: 2)
+        .shadow(color: Theme.shadow, radius: 5, y: 2)
     }
 
     private var empty: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 20) {
             Image(systemName: "square.grid.2x2")
-                .font(.system(size: 46)).foregroundStyle(.tertiary)
-            Text("لا تطبيقات بعد").font(.headline)
+                .font(.system(size: 46)).foregroundStyle(Theme.champagne)
+            Text("مكتبتك تبدأ هنا.").font(.title2.weight(.bold))
             Text("أضف ملف APK وسيُثبَّت في بيئة أندرويد، ثم يظهر هنا بأيقونته.")
                 .font(.callout).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center).padding(.horizontal, 44)
             Button { importing = true } label: {
                 Label("إضافة APK", systemImage: "plus")
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(PrimaryButtonStyle())
+            .padding(.horizontal, 44)
             if let msg = bridge.lastAgentMessage {
                 Text(msg)
                     .font(.caption2).foregroundStyle(.orange)

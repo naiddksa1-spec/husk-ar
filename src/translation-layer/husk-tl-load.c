@@ -272,6 +272,7 @@ typedef struct {
     uint8_t  *page_flags;
     uint64_t  base_vaddr;
     const tl_sym *symtab; uint64_t syment;
+    size_t sym_count, gnu_hash_bytes;
     const uint8_t *strtab; uint64_t strsz;
     uint64_t gnu_hash;
     uint64_t init, fini, init_array, init_arraysz;
@@ -587,7 +588,9 @@ static bool lex_seg(lex *e, uint64_t v, uint64_t len, uint64_t *off)
 {
     for (int i = 0; i < e->nloads; i++) {
         if (v >= e->lv[i] && v - e->lv[i] <= e->lf[i] && len <= e->lf[i] - (v - e->lv[i])) {
-            uint64_t o = e->lo[i] + (v - e->lv[i]);
+            uint64_t delta = v - e->lv[i];
+            if (e->lo[i] > UINT64_MAX - delta) return false;
+            uint64_t o = e->lo[i] + delta;
             if (o > e->n || len > e->n - o) {
                 return false;
             }
@@ -662,7 +665,7 @@ static const char *ldyn_str(lex *e, const ldyn *d, uint64_t vaddr_off)
     while (i < d->strsz - vaddr_off && base[vaddr_off + i] != '\0') {
         i++;
     }
-    return base + vaddr_off;
+    return i < d->strsz - vaddr_off ? base + vaddr_off : "";
 }
 
 /* ------------------------------------------------------------ mapping  */
@@ -701,13 +704,15 @@ static void *lib_lookup(const tl_lib *L, const char *name)
         return NULL;
     }
     if (!L->gnu_hash) {
-        for (size_t i = 1; i < 8192; i++) {
+        for (size_t i = 1; i < L->sym_count; i++) {
             const tl_sym *s = &L->symtab[i];
             uint32_t name_off = ld32((const uint8_t *)&s->st_name);
-            if (name_off == 0 || name_off >= L->strsz) break;
+            if (name_off == 0 || name_off >= L->strsz) continue;
             const char *sn = (const char *)L->strtab + name_off;
+            if (!memchr(sn, 0, L->strsz - name_off)) continue;
             if (!strcmp(sn, name) && s->st_value != 0) {
                 uint64_t target_off = s->st_value - L->base_vaddr;
+                if (s->st_value < L->base_vaddr || target_off >= L->npages * TL_PAGE) return NULL;
                 size_t p = (size_t)(target_off / TL_PAGE);
                 if (L->is_stikdebug && p < L->npages && (L->page_flags[p] & TL_PAGE_W)) {
                     return L->base_rw + target_off;
@@ -720,6 +725,11 @@ static void *lib_lookup(const tl_lib *L, const char *name)
     const uint8_t *g = (const uint8_t *)L->gnu_hash;
     uint32_t nbuckets = ld32(g), symoffset = ld32(g + 4);
     uint32_t bloom_size = ld32(g + 8), bloom_shift = ld32(g + 12);
+    if (L->gnu_hash_bytes < 16 || bloom_shift >= 32 || !nbuckets
+        || bloom_size > (L->gnu_hash_bytes - 16) / 8) return NULL;
+    size_t prefix = 16 + (size_t)bloom_size * 8;
+    if (nbuckets > (L->gnu_hash_bytes - prefix) / 4) return NULL;
+    size_t chain_count = (L->gnu_hash_bytes - prefix - (size_t)nbuckets * 4) / 4;
     const uint64_t *bloom = (const uint64_t *)(g + 16);
     const uint32_t *buckets = (const uint32_t *)(g + 16 + (size_t)bloom_size * 8);
     const uint32_t *chains = buckets + nbuckets;
@@ -738,13 +748,17 @@ static void *lib_lookup(const tl_lib *L, const char *name)
     if (bucket < symoffset) {
         return NULL;
     }
-    for (uint32_t i = bucket;; i++) {
+    for (uint32_t i = bucket; i < L->sym_count && (size_t)(i - symoffset) < chain_count; i++) {
         uint32_t chain = chains[i - symoffset];
         if ((h | 1) == (chain | 1)) {
             const tl_sym *s = &L->symtab[i];
-            const char *sn = (const char *)L->strtab + ld32((const uint8_t *)&s->st_name);
+            uint32_t name_off = ld32((const uint8_t *)&s->st_name);
+            if (name_off >= L->strsz) return NULL;
+            const char *sn = (const char *)L->strtab + name_off;
+            if (!memchr(sn, 0, L->strsz - name_off)) return NULL;
             if (sn && !strcmp(sn, name) && s->st_value != 0) {
                 uint64_t target_off = s->st_value - L->base_vaddr;
+                if (s->st_value < L->base_vaddr || target_off >= L->npages * TL_PAGE) return NULL;
                 size_t p = (size_t)(target_off / TL_PAGE);
                 if (L->is_stikdebug && p < L->npages && (L->page_flags[p] & TL_PAGE_W)) {
                     return L->base_rw + target_off;
@@ -756,6 +770,7 @@ static void *lib_lookup(const tl_lib *L, const char *name)
             return NULL;
         }
     }
+    return NULL;
 }
 
 /* Resolve one import: libraries loaded earlier first (so a library sees
@@ -804,9 +819,23 @@ static int64_t rd_sleb(sleb_r *s)
 /* All relocation targets are in RELRO or data -- never in code -- and the
  * carved layout makes every such page ordinary writable memory, so no
  * JIT window is needed here. */
+static bool image_offset(const tl_lib *L, uint64_t vaddr, size_t bytes, uint64_t *off)
+{
+    uint64_t span = (uint64_t)L->npages * TL_PAGE;
+    if (vaddr < L->base_vaddr || vaddr - L->base_vaddr > span) return false;
+    uint64_t o = vaddr - L->base_vaddr;
+    if ((uint64_t)bytes > span - o) return false;
+    *off = o;
+    return true;
+}
+
 static bool reloc_one(uint64_t off_in_image, uint32_t type, uint32_t symidx,
                       int64_t addend, tl_lib *L)
 {
+    if (type == R_AARCH64_NONE) return true;
+    uint64_t span = (uint64_t)L->npages * TL_PAGE;
+    if (span < 8 || off_in_image < L->base_vaddr
+        || off_in_image - L->base_vaddr > span - 8 || (off_in_image & 7)) return false;
     uint64_t offset = off_in_image - L->base_vaddr;
     size_t page_idx = (size_t)(offset / TL_PAGE);
     uint8_t *place = (page_idx < L->npages && (L->page_flags[page_idx] & TL_PAGE_CARVED))
@@ -817,6 +846,7 @@ static bool reloc_one(uint64_t off_in_image, uint32_t type, uint32_t symidx,
     case R_AARCH64_NONE:
         return true;
     case R_AARCH64_RELATIVE: {
+        if ((uint64_t)addend < L->base_vaddr || (uint64_t)addend - L->base_vaddr >= span) return false;
         uint64_t target_off = (uint64_t)addend - L->base_vaddr;
         size_t target_p = (size_t)(target_off / TL_PAGE);
         if (L->is_stikdebug && target_p < L->npages && (L->page_flags[target_p] & TL_PAGE_W)) {
@@ -830,6 +860,7 @@ static bool reloc_one(uint64_t off_in_image, uint32_t type, uint32_t symidx,
     case R_AARCH64_GLOB_DAT:
     case R_AARCH64_JUMP_SLOT: {
         if (symidx == 0) {
+            if ((uint64_t)addend < L->base_vaddr || (uint64_t)addend - L->base_vaddr >= span) return false;
             uint64_t target_off = (uint64_t)addend - L->base_vaddr;
             size_t target_p = (size_t)(target_off / TL_PAGE);
             if (L->is_stikdebug && target_p < L->npages && (L->page_flags[target_p] & TL_PAGE_W)) {
@@ -839,10 +870,13 @@ static bool reloc_one(uint64_t off_in_image, uint32_t type, uint32_t symidx,
             }
             return true;
         }
+        if (!L->symtab || symidx >= L->sym_count) return false;
         const tl_sym *s = &L->symtab[symidx];
         uint32_t bind = s->st_info >> 4;
         bool undef = s->st_shndx == SHN_UNDEF;
         if (undef) {
+            uint32_t name_off = ld32((const uint8_t *)&s->st_name);
+            if (name_off >= L->strsz || !memchr(L->strtab + name_off, 0, L->strsz - name_off)) return false;
             const char *sname = (const char *)L->strtab
                               + ld32((const uint8_t *)&s->st_name);
             bool weak = bind == STB_WEAK;
@@ -859,7 +893,17 @@ static bool reloc_one(uint64_t off_in_image, uint32_t type, uint32_t symidx,
             *(uint64_t *)place = (uint64_t)addr;
             return true;
         }
-        uint64_t target_off = s->st_value + (uint64_t)addend - L->base_vaddr;
+        uint64_t target_vaddr;
+        if (addend >= 0) {
+            if (s->st_value > UINT64_MAX - (uint64_t)addend) return false;
+            target_vaddr = s->st_value + (uint64_t)addend;
+        } else {
+            uint64_t magnitude = (uint64_t)(-(addend + 1)) + 1;
+            if (s->st_value < magnitude) return false;
+            target_vaddr = s->st_value - magnitude;
+        }
+        uint64_t target_off;
+        if (!image_offset(L, target_vaddr, 1, &target_off)) return false;
         size_t target_p = (size_t)(target_off / TL_PAGE);
         if (L->is_stikdebug && target_p < L->npages && (L->page_flags[target_p] & TL_PAGE_W)) {
             *(uint64_t *)place = (uint64_t)L->base_rw + target_off;
@@ -925,7 +969,7 @@ static bool apply_relocations(tl_lib *L, lex *e, const ldyn *d)
     /* Android packed (APS2). */
     if (d->packed_rela && d->packed_relasz) {
         uint64_t off;
-        if (!lex_seg(e, d->packed_rela, d->packed_relasz, &off)) {
+        if (d->packed_relasz < 4 || !lex_seg(e, d->packed_rela, d->packed_relasz, &off)) {
             return false;
         }
         if (memcmp(e->d + off, "APS2", 4) != 0) {
@@ -935,14 +979,14 @@ static bool apply_relocations(tl_lib *L, lex *e, const ldyn *d)
         sleb_r s = { e->d + off + 4, e->d + off + d->packed_relasz, false };
         int64_t count = rd_sleb(&s);
         int64_t relof = rd_sleb(&s);
-        if (s.bad || count < 0) {
+        if (s.bad || count < 0 || count > (16u << 20)) {
             return false;
         }
         int64_t done2 = 0;
         uint64_t info = 0;
         while (done2 < count) {
             int64_t group = rd_sleb(&s), gflags = rd_sleb(&s);
-            if (s.bad || group <= 0 || done2 + group > count) {
+            if (s.bad || group <= 0 || group > count - done2) {
                 return false;
             }
             int64_t delta = (gflags & 2) ? rd_sleb(&s) : 0;
@@ -958,7 +1002,7 @@ static bool apply_relocations(tl_lib *L, lex *e, const ldyn *d)
             for (int64_t i = 0; i < group; i++) {
                 if (gflags & 2) {
                     if (i > 0) {
-                        relof += delta;
+                        relof = (int64_t)((uint64_t)relof + (uint64_t)delta);
                     }
                 } else {
                     relof = rd_sleb(&s);
@@ -993,24 +1037,29 @@ static bool apply_relocations(tl_lib *L, lex *e, const ldyn *d)
         for (size_t i = 0; i < n; i++) {
             uint64_t word = ld64(w + i * 8);
             if (!(word & 1)) {
+                uint64_t span = (uint64_t)L->npages * TL_PAGE;
+                if (span < 8 || word < L->base_vaddr || word - L->base_vaddr > span - 8
+                    || (word & 7) || word > UINT64_MAX - 8) return false;
                 uint64_t offset = word - L->base_vaddr;
                 size_t p = (size_t)(offset / TL_PAGE);
-                uint8_t *target = (p < L->npages && (L->page_flags[p] & TL_PAGE_CARVED))
-                                ? (L->base + offset)
-                                : (L->base_rw ? L->base_rw + offset : L->base + offset);
-                *(uint64_t *)target = (uint64_t)L->base + word;
+                const uint8_t *target = (L->page_flags[p] & TL_PAGE_CARVED)
+                    ? L->base + offset : (L->base_rw ? L->base_rw : L->base) + offset;
+                if (!reloc_one(word, R_AARCH64_RELATIVE, 0, (int64_t)ld64(target), L)) return false;
                 addr = word + 8;
                 done++;
             } else {
-                for (uint64_t bit = 1; bit != 0 && bit < (1ull << 63); bit <<= 1) {
-                    if (word & bit) {
-                        uint64_t a = addr + (bit >> 1);
+                if (!addr || addr > UINT64_MAX - 63 * 8) return false;
+                for (unsigned bit = 1; bit < 64; bit++) {
+                    if (word & (1ull << bit)) {
+                        uint64_t a = addr + (uint64_t)(bit - 1) * 8;
+                        uint64_t span = (uint64_t)L->npages * TL_PAGE;
+                        if (span < 8 || a < L->base_vaddr || a - L->base_vaddr > span - 8) return false;
                         uint64_t offset = a - L->base_vaddr;
                         size_t p = (size_t)(offset / TL_PAGE);
                         uint8_t *target = (p < L->npages && (L->page_flags[p] & TL_PAGE_CARVED))
                                         ? (L->base + offset)
                                         : (L->base_rw ? L->base_rw + offset : L->base + offset);
-                        *(uint64_t *)target = (uint64_t)L->base + a;
+                        if (!reloc_one(a, R_AARCH64_RELATIVE, 0, (int64_t)ld64(target), L)) return false;
                         done++;
                     }
                 }
@@ -1196,12 +1245,12 @@ static bool load_library(const char *name, const uint8_t *file, size_t flen)
         tl_log_line("load: %s is not a 64-bit little-endian image", name);
         return false;
     }
-    if (eh->e_machine != EM_AARCH64) {
+    if (eh->e_type != 3 || eh->e_machine != EM_AARCH64) {
         tl_log_line("load: %s is not arm64 (machine %u)", name, eh->e_machine);
         return false;
     }
-    if (eh->e_phentsize < sizeof(tl_phdr)
-        || (size_t)eh->e_phoff + (size_t)eh->e_phnum * eh->e_phentsize > flen) {
+    if (eh->e_phentsize != sizeof(tl_phdr) || eh->e_phoff > flen
+        || eh->e_phnum > (flen - (size_t)eh->e_phoff) / sizeof(tl_phdr)) {
         tl_log_line("load: %s has a program header table off the end", name);
         return false;
     }
@@ -1215,6 +1264,12 @@ static bool load_library(const char *name, const uint8_t *file, size_t flen)
     for (int i = 0; i < eh->e_phnum; i++) {
         const uint8_t *ph = file + eh->e_phoff + (size_t)i * eh->e_phentsize;
         uint32_t type = ld32(ph);
+        if (type == PT_LOAD) {
+            uint64_t v = ld64(ph + 16), fo = ld64(ph + 8);
+            uint64_t fs = ld64(ph + 32), ms = ld64(ph + 40);
+            if (nloads >= 16 || fs > ms || v > UINT64_MAX - ms
+                || fo > flen || fs > flen - fo) return false;
+        }
         if (type == PT_LOAD && nloads < 16) {
             loads[nloads++] = (const tl_phdr *)ph;
             e.lv[e.nloads] = ld64(ph + 16);              /* p_vaddr */
@@ -1226,8 +1281,13 @@ static bool load_library(const char *name, const uint8_t *file, size_t flen)
             relro.vaddr = ld64(ph + 16);
             relro.memsz = ld64(ph + 40);
         } else if (type == PT_DYNAMIC) {
+            uint64_t doff = ld64(ph + 8), dsz = ld64(ph + 32);
+            if (doff > flen || dsz > flen - doff) {
+                tl_log_line("load: %s dynamic table lies off the file", name);
+                return false;
+            }
             e.dyn_vaddr = ld64(ph + 16);
-            e.dyn_filesz = ld64(ph + 32);
+            e.dyn_filesz = dsz;
         } else if (type == PT_TLS) {
             has_tls = true;
         }
@@ -1343,7 +1403,9 @@ static bool load_library(const char *name, const uint8_t *file, size_t flen)
         const uint8_t *ph = (const uint8_t *)loads[i];
         uint64_t v = ld64(ph + 16), fo = ld64(ph + 8);
         uint64_t fs = ld64(ph + 32), ms = ld64(ph + 40);
-        if (fo > flen || fs > flen - fo) {
+        uint64_t span = (uint64_t)npages * TL_PAGE;
+        if (fo > flen || fs > flen - fo || fs > ms || v < base_vaddr
+            || v - base_vaddr >= span || ms > span - (v - base_vaddr)) {
             tl_log_line("load: %s segment %d hangs off the file", name, i);
             ok = false;
             break;
@@ -1388,8 +1450,10 @@ static bool load_library(const char *name, const uint8_t *file, size_t flen)
         unmap_lib(&(tl_lib){ .base = base, .npages = npages, .page_flags = flags, .is_stikdebug = is_stikdebug });
         return false;
     }
-    if (!lex_seg(&e, d.symtab, sizeof(tl_sym), &sym_off)) {
-        sym_off = 0;
+    if (d.syment != sizeof(tl_sym) || d.symtab % 8
+        || !lex_seg(&e, d.symtab, sizeof(tl_sym), &sym_off)) {
+        unmap_lib(&(tl_lib){ .base = base, .npages = npages, .page_flags = flags, .is_stikdebug = is_stikdebug });
+        return false;
     }
 
     tl_lib *L = &g_run.libs[g_run.nlibs];
@@ -1403,6 +1467,14 @@ static bool load_library(const char *name, const uint8_t *file, size_t flen)
     L->page_flags = flags;
     L->base_vaddr = base_vaddr;
     L->symtab = (const tl_sym *)(file + sym_off);
+    for (int i = 0; i < e.nloads; i++) {
+        if (d.symtab >= e.lv[i] && d.symtab - e.lv[i] < e.lf[i]) {
+            uint64_t bytes = e.lf[i] - (d.symtab - e.lv[i]);
+            if (d.strtab > d.symtab && d.strtab - d.symtab < bytes) bytes = d.strtab - d.symtab;
+            L->sym_count = (size_t)(bytes / sizeof(tl_sym));
+            break;
+        }
+    }
     L->syment = d.syment ? d.syment : sizeof(tl_sym);
     L->strtab = file + str_off;
     L->strsz = d.strsz;
@@ -1411,18 +1483,34 @@ static bool load_library(const char *name, const uint8_t *file, size_t flen)
     L->fini = d.fini;
     L->init_array = d.init_array;
     L->init_arraysz = d.init_arraysz;
+    uint64_t image_span = (uint64_t)npages * TL_PAGE;
+    if ((L->init && (L->init < base_vaddr || L->init - base_vaddr >= image_span
+            || !(flags[(L->init - base_vaddr) / TL_PAGE] & TL_PAGE_X)))
+        || (L->init_arraysz && (L->init_array < base_vaddr || L->init_array % 8
+            || L->init_arraysz % 8 || L->init_array - base_vaddr > image_span
+            || L->init_arraysz > image_span - (L->init_array - base_vaddr)))) {
+        unmap_lib(L);
+        memset(L, 0, sizeof(*L));
+        return false;
+    }
 
     /* gnu_hash is read through the mapped image at run time, but it lives
      * in read-only data, which is file-backed in the image. Map lookups
      * read it through L->base, so store the IMAGE address of the table. */
     {
         uint64_t gho = 0;
-        if (d.gnu_hash && lex_seg(&e, d.gnu_hash, 64, &gho)) {
+        if (d.gnu_hash && !(d.gnu_hash & 7) && lex_seg(&e, d.gnu_hash, 64, &gho)) {
             /* The table's size is not in the file; it is bounded by the
              * strtab address. Store the image pointer only if the bytes
              * are readable in the image: read-only pages are mapped
              * file-backed, so compare against the image layout. */
-            L->gnu_hash = (uint64_t)(base + (d.gnu_hash - base_vaddr));
+            for (int i = 0; i < e.nloads; i++) {
+                if (d.gnu_hash >= e.lv[i] && d.gnu_hash - e.lv[i] < e.lf[i]) {
+                    L->gnu_hash_bytes = (size_t)(e.lf[i] - (d.gnu_hash - e.lv[i]));
+                    break;
+                }
+            }
+            L->gnu_hash = (uint64_t)(uintptr_t)(file + gho);
         } else {
             L->gnu_hash = 0;
         }

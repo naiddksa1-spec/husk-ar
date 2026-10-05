@@ -106,6 +106,33 @@ size_t tl_ld_unresolved_count(void) { return G.unresolved; }
 
 static inline const void *at(const tl_lib *L, uint64_t vaddr) { return L->rw + (vaddr - L->base_vaddr); }
 
+/* Subtraction-based checks, also excluding holes between PT_LOAD segments. */
+static bool image_range(const tl_lib *L, uint64_t vaddr, uint64_t bytes)
+{
+    uint64_t span = (uint64_t)L->npages * PAGE;
+    if (vaddr < L->base_vaddr || vaddr - L->base_vaddr > span
+        || bytes > span - (vaddr - L->base_vaddr)) return false;
+    for (unsigned i = 0; i < L->phnum; i++) {
+        const elf_phdr *p = &L->phdr[i];
+        if (p->p_type == PT_LOAD_ && vaddr >= p->p_vaddr
+            && vaddr - p->p_vaddr <= p->p_memsz
+            && bytes <= p->p_memsz - (vaddr - p->p_vaddr)) return true;
+    }
+    return false;
+}
+
+static size_t table_capacity(const tl_lib *L, uint64_t vaddr)
+{
+    if (!image_range(L, vaddr, 1)) return 0;
+    for (unsigned i = 0; i < L->phnum; i++) {
+        const elf_phdr *p = &L->phdr[i];
+        if (p->p_type == PT_LOAD_ && vaddr >= p->p_vaddr
+            && vaddr - p->p_vaddr < p->p_filesz)
+            return (size_t)(p->p_filesz - (vaddr - p->p_vaddr));
+    }
+    return 0;
+}
+
 /* ------------------------------------------------------------- the APKs */
 
 bool tl_ld_add_apk(const char *path)
@@ -169,7 +196,10 @@ static uint32_t sysv_hash(const char *s)
 
 static const char *sym_name(const tl_lib *L, const elf_sym *s)
 {
-    return (const char *)at(L, L->strtab) + s->st_name;
+    if (s->st_name >= L->strsz) return "";
+    const char *p = (const char *)at(L, L->strtab) + s->st_name;
+    if (!memchr(p, 0, (size_t)(L->strsz - s->st_name))) return "";
+    return p;
 }
 
 static const elf_sym *sym_at(const tl_lib *L, uint32_t i)
@@ -180,6 +210,8 @@ static const elf_sym *sym_at(const tl_lib *L, uint32_t i)
 /* The address a defined symbol is known by: the writable view for data. */
 static void *sym_value(const tl_lib *L, const elf_sym *s)
 {
+    if (s->st_shndx == 0xfff1) return (void *)(uintptr_t)s->st_value; /* SHN_ABS */
+    if (!image_range(L, s->st_value, 1)) return NULL;
     uint64_t off = s->st_value - L->base_vaddr;
     size_t page = (size_t)(off / PAGE);
     bool is_func = (s->st_info & 0xf) == 2;
@@ -205,7 +237,7 @@ static const elf_sym *lib_find(const tl_lib *L, const char *name)
         }
         uint32_t b = buckets[h % nb];
         if (b < symoff) return NULL;
-        for (uint32_t i = b;; i++) {
+        for (uint32_t i = b; i < L->nsyms; i++) {
             uint32_t c = chains[i - symoff];
             if ((h | 1) == (c | 1)) {
                 const elf_sym *s = sym_at(L, i);
@@ -219,7 +251,8 @@ static const elf_sym *lib_find(const tl_lib *L, const char *name)
         const uint32_t *t = at(L, L->sysv_hash);
         uint32_t nb = t[0], nc = t[1];
         if (!nb) return NULL;
-        for (uint32_t i = t[2 + sysv_hash(name) % nb]; i && i < nc; i = t[2 + nb + i]) {
+        uint32_t steps = 0;
+        for (uint32_t i = t[2 + sysv_hash(name) % nb]; i && i < nc && steps++ < nc; i = t[2 + nb + i]) {
             const elf_sym *s = sym_at(L, i);
             if (s->st_shndx != SHN_UNDEF_ && !strcmp(sym_name(L, s), name)) return s;
         }
@@ -229,17 +262,40 @@ static const elf_sym *lib_find(const tl_lib *L, const char *name)
 
 static uint32_t count_dynsyms(const tl_lib *L)
 {
-    if (L->sysv_hash) return ((const uint32_t *)at(L, L->sysv_hash))[1];
+    size_t symcap = table_capacity(L, L->symtab) / sizeof(elf_sym);
+    if (L->strtab > L->symtab && L->strtab - L->symtab < symcap * sizeof(elf_sym))
+        symcap = (size_t)((L->strtab - L->symtab) / sizeof(elf_sym));
+    if (L->sysv_hash) {
+        size_t cap = table_capacity(L, L->sysv_hash);
+        if (cap < 8 || (L->sysv_hash & 3)) return 0;
+        const uint32_t *t = at(L, L->sysv_hash);
+        uint32_t nb = t[0], nc = t[1];
+        if (!nb || !nc || nc > symcap || (uint64_t)nb + nc > (cap - 8) / 4) return 0;
+        for (size_t i = 0; i < (size_t)nb + nc; i++) if (t[2 + i] >= nc) return 0;
+        return nc;
+    }
     if (!L->gnu_hash) return 0;
+    size_t cap = table_capacity(L, L->gnu_hash);
+    if (cap < 16 || (L->gnu_hash & 7)) return 0;
     const uint8_t *g = at(L, L->gnu_hash);
-    uint32_t nb, symoff, bloom_n;
+    uint32_t nb, symoff, bloom_n, shift;
     memcpy(&nb, g, 4); memcpy(&symoff, g + 4, 4); memcpy(&bloom_n, g + 8, 4);
+    memcpy(&shift, g + 12, 4);
+    if (!nb || !bloom_n || shift >= 32 || symoff > symcap || bloom_n > (cap - 16) / 8) return 0;
+    size_t prefix = 16 + (size_t)bloom_n * 8;
+    if (nb > (cap - prefix) / 4) return 0;
+    size_t chaincap = (cap - prefix - (size_t)nb * 4) / 4;
     const uint32_t *buckets = (const uint32_t *)(g + 16 + (size_t)bloom_n * 8);
     const uint32_t *chains = buckets + nb;
     uint32_t last = 0;
-    for (uint32_t i = 0; i < nb; i++) if (buckets[i] > last) last = buckets[i];
+    for (uint32_t i = 0; i < nb; i++) {
+        if (buckets[i] && (buckets[i] < symoff || buckets[i] >= symcap
+            || buckets[i] - symoff >= chaincap)) return 0;
+        if (buckets[i] > last) last = buckets[i];
+    }
     if (last < symoff) return symoff;
-    while (!(chains[last - symoff] & 1)) last++;
+    while (last < symcap && (size_t)(last - symoff) < chaincap && !(chains[last - symoff] & 1)) last++;
+    if (last >= symcap || (size_t)(last - symoff) >= chaincap || last == UINT32_MAX) return 0;
     return last + 1;
 }
 
@@ -925,6 +981,7 @@ static uint64_t image_addr(const tl_lib *L, uint64_t vaddr)
 
 static uint64_t bind_symbol(tl_lib *L, uint32_t symidx, bool *failed)
 {
+    if (symidx >= L->nsyms) { *failed = true; return 0; }
     if (L->symcache && L->symcache[symidx]) return L->symcache[symidx];
     const elf_sym *s = sym_at(L, symidx);
     const char *name = sym_name(L, s);
@@ -956,18 +1013,23 @@ static uint64_t bind_symbol(tl_lib *L, uint32_t symidx, bool *failed)
 
 static bool reloc_one(tl_lib *L, uint64_t r_offset, uint32_t type, uint32_t symidx, int64_t addend)
 {
+    if (type == R_NONE) return true;
+    if ((r_offset & 7) || !image_range(L, r_offset, 8)) return false;
     uint64_t off = r_offset - L->base_vaddr;
-    if (off + 8 > L->npages * PAGE) return false;
     uint64_t *place = (uint64_t *)(L->rw + off);
     bool failed = false;
     switch (type) {
     case R_NONE:
         return true;
     case R_RELATIVE:
+        if (!image_range(L, (uint64_t)addend, 1)) return false;
         *place = image_addr(L, (uint64_t)addend);
         return true;
     case R_ABS64: case R_GLOB_DAT: case R_JUMP_SLOT: {
-        if (symidx == 0) { *place = image_addr(L, (uint64_t)addend); return true; }
+        if (symidx == 0) {
+            if (!image_range(L, (uint64_t)addend, 1)) return false;
+            *place = image_addr(L, (uint64_t)addend); return true;
+        }
         uint64_t v = bind_symbol(L, symidx, &failed);
         if (failed) return false;
         if (v == 1 && L->symcache) v = 0;
@@ -975,6 +1037,8 @@ static bool reloc_one(tl_lib *L, uint64_t r_offset, uint32_t type, uint32_t symi
         return true;
     }
     case R_IRELATIVE: {
+        if (!image_range(L, (uint64_t)addend, 4)
+            || !(L->pflags[((uint64_t)addend - L->base_vaddr) / PAGE] & TL_PAGE_X)) return false;
         /* The resolver is guest code: run it, store what it returns. */
         uint64_t (*resolver)(void) = (uint64_t (*)(void))(uintptr_t)(L->rx + ((uint64_t)addend - L->base_vaddr));
         *place = resolver();
@@ -992,6 +1056,7 @@ static bool reloc_one(tl_lib *L, uint64_t r_offset, uint32_t type, uint32_t symi
 static bool do_relas(tl_lib *L, uint64_t addr, uint64_t size, size_t *count)
 {
     if (!addr || !size) return true;
+    if (addr % 8 || size % sizeof(elf_rela) || size > table_capacity(L, addr)) return false;
     const elf_rela *r = at(L, addr);
     for (size_t i = 0; i < size / sizeof(elf_rela); i++) {
         if (!reloc_one(L, r[i].r_offset, (uint32_t)(r[i].r_info & 0xffffffffu),
@@ -1025,27 +1090,30 @@ static bool do_packed(tl_lib *L, size_t *count)
      * own offset delta, info and addend delta as the flags leave them unshared.
      */
     if (!L->arela || !L->arelasz) return true;
+    if (L->arelasz < 4 || L->arelasz > table_capacity(L, L->arela)) return false;
     const uint8_t *d = at(L, L->arela);
     if (memcmp(d, "APS2", 4) != 0) { tl_log_line("ld: %s: packed relocations lack APS2 magic", L->name); return false; }
     sleb s = { d + 4, d + L->arelasz, false };
     int64_t total = rd_sleb(&s);
     uint64_t r_offset = (uint64_t)rd_sleb(&s), r_info = 0;
     int64_t r_addend = 0;
-    if (s.bad || total < 0) return false;
+    if (s.bad || total < 0 || total > (16u << 20)) return false;
     enum { BY_INFO = 1, BY_DELTA = 2, BY_ADDEND = 4, HAS_ADDEND = 8 };
     for (int64_t idx = 0; idx < total;) {
         int64_t group = rd_sleb(&s), flags = rd_sleb(&s);
-        if (s.bad || group <= 0 || idx + group > total) return false;
+        if (s.bad || group <= 0 || group > total - idx) return false;
         uint64_t group_delta = 0;
         if (flags & BY_DELTA) group_delta = (uint64_t)rd_sleb(&s);
         if (flags & BY_INFO) r_info = (uint64_t)rd_sleb(&s);
         int addend_mode = (int)(flags & (HAS_ADDEND | BY_ADDEND));
-        if (addend_mode == (HAS_ADDEND | BY_ADDEND)) r_addend += rd_sleb(&s);
+        if (addend_mode == (HAS_ADDEND | BY_ADDEND))
+            r_addend = (int64_t)((uint64_t)r_addend + (uint64_t)rd_sleb(&s));
         else if (addend_mode != HAS_ADDEND) r_addend = 0;
         for (int64_t i = 0; i < group; i++) {
             r_offset += (flags & BY_DELTA) ? group_delta : (uint64_t)rd_sleb(&s);
             if (!(flags & BY_INFO)) r_info = (uint64_t)rd_sleb(&s);
-            if (addend_mode == HAS_ADDEND) r_addend += rd_sleb(&s);
+            if (addend_mode == HAS_ADDEND)
+                r_addend = (int64_t)((uint64_t)r_addend + (uint64_t)rd_sleb(&s));
             if (s.bad) return false;
             if (!reloc_one(L, r_offset, (uint32_t)(r_info & 0xffffffffu), (uint32_t)(r_info >> 32), r_addend)) return false;
             (*count)++;
@@ -1058,18 +1126,22 @@ static bool do_packed(tl_lib *L, size_t *count)
 static bool do_relr(tl_lib *L, size_t *count)
 {
     if (!L->relr || !L->relrsz) return true;
+    if (L->relr % 8 || L->relrsz % 8 || L->relrsz > table_capacity(L, L->relr)) return false;
     const uint8_t *w = at(L, L->relr);
     uint64_t where = 0;
     for (size_t i = 0; i < L->relrsz / 8; i++) {
         uint64_t word = rd64(w + i * 8);
         if (!(word & 1)) {
+            if (word > UINT64_MAX - 8 || (word & 7) || !image_range(L, word, 8)) return false;
             if (!reloc_one(L, word, R_RELATIVE, 0, (int64_t)rd64(L->rw + (word - L->base_vaddr)))) return false;
             (*count)++;
             where = word + 8;
         } else {
+            if (!where || where > UINT64_MAX - 63 * 8) return false;
             for (unsigned b = 1; b < 64; b++) {
                 if (word & (1ull << b)) {
                     uint64_t a = where + (uint64_t)(b - 1) * 8;
+                    if (!image_range(L, a, 8)) return false;
                     if (!reloc_one(L, a, R_RELATIVE, 0, (int64_t)rd64(L->rw + (a - L->base_vaddr)))) return false;
                     (*count)++;
                 }
@@ -1082,12 +1154,15 @@ static bool do_relr(tl_lib *L, size_t *count)
 
 /* ----------------------------------------------------------------- mapping */
 
-static void parse_dynamic(tl_lib *L, uint64_t dyn_vaddr, uint64_t dyn_size)
+static bool parse_dynamic(tl_lib *L, uint64_t dyn_vaddr, uint64_t dyn_size)
 {
+    if (dyn_vaddr % 8 || dyn_size % sizeof(elf_dyn)
+        || dyn_size > table_capacity(L, dyn_vaddr)) return false;
     const elf_dyn *d = at(L, dyn_vaddr);
     for (size_t i = 0; i < dyn_size / sizeof(elf_dyn); i++) {
         switch (d[i].d_tag) {
-        case DT_NULL_: return;
+        case DT_NULL_: return true;
+        case 11: if (d[i].d_val != sizeof(elf_sym)) return false; break; /* DT_SYMENT */
         case DT_NEEDED_: if (L->nneeded < MAX_DEPS) L->needed[L->nneeded++] = d[i].d_val; break;
         case DT_STRTAB_: L->strtab = d[i].d_val; break;
         case DT_STRSZ_: L->strsz = d[i].d_val; break;
@@ -1109,6 +1184,7 @@ static void parse_dynamic(tl_lib *L, uint64_t dyn_vaddr, uint64_t dyn_size)
         default: break;
         }
     }
+    return false;
 }
 
 static bool ensure_tcb(void)
@@ -1131,7 +1207,8 @@ static tl_lib *map_library(const char *name, uint8_t *file, size_t flen)
         tl_log_line("ld: %s is not a 64-bit little-endian arm64 ELF image", name);
         return NULL;
     }
-    if (eh->e_phentsize < sizeof(elf_phdr) || eh->e_phoff + (uint64_t)eh->e_phnum * eh->e_phentsize > flen) {
+    if (eh->e_phentsize != sizeof(elf_phdr) || eh->e_phoff > flen
+        || eh->e_phnum > (flen - (size_t)eh->e_phoff) / sizeof(elf_phdr)) {
         tl_log_line("ld: %s: program headers run off the file", name);
         return NULL;
     }
@@ -1142,6 +1219,9 @@ static tl_lib *map_library(const char *name, uint8_t *file, size_t flen)
     for (unsigned i = 0; i < eh->e_phnum; i++) {
         memcpy(&phs[i], file + eh->e_phoff + (size_t)i * eh->e_phentsize, sizeof(elf_phdr));
         const elf_phdr *p = &phs[i];
+        if (p->p_type == PT_LOAD_ && (nloads >= 16 || p->p_filesz > p->p_memsz
+            || p->p_vaddr > UINT64_MAX - p->p_memsz || p->p_offset > flen
+            || p->p_filesz > flen - p->p_offset)) { free(phs); return NULL; }
         if (p->p_type == PT_LOAD_ && nloads < 16) {
             loads[nloads].vaddr = p->p_vaddr; loads[nloads].memsz = p->p_memsz; loads[nloads].flags = p->p_flags;
             nloads++;
@@ -1159,19 +1239,26 @@ static tl_lib *map_library(const char *name, uint8_t *file, size_t flen)
 
     uint64_t base_vaddr = 0;
     size_t npages = tl_page_plan(loads, (size_t)nloads, has_relro ? &relro : NULL, PAGE, NULL, 0, &base_vaddr);
-    if (!npages) { tl_log_line("ld: %s: unusable page layout", name); free(phs); return NULL; }
+    if (!npages || npages > (1u << 30) / PAGE) {
+        tl_log_line("ld: %s: unusable or oversized page layout", name); free(phs); return NULL;
+    }
     uint8_t *flags = malloc(npages);
+    if (!flags) { free(phs); return NULL; }
     tl_page_plan(loads, (size_t)nloads, has_relro ? &relro : NULL, PAGE, flags, npages, &base_vaddr);
 
     /* The executable sections, from the section headers when the file has them (it almost always does);
      * otherwise whole executable segments, which is correct for a library with nothing but code in them. */
     struct { uint64_t vaddr, size, foff; } code[16]; int ncode = 0;
-    if (eh->e_shoff && eh->e_shentsize >= 64 && eh->e_shnum && eh->e_shoff + (uint64_t)eh->e_shnum * eh->e_shentsize <= flen) {
+    if (eh->e_shoff && eh->e_shentsize >= 64 && eh->e_shnum && eh->e_shoff <= flen
+        && eh->e_shnum <= (flen - (size_t)eh->e_shoff) / eh->e_shentsize) {
         for (unsigned i = 0; i < eh->e_shnum && ncode < 16; i++) {
             const uint8_t *sh = file + eh->e_shoff + (size_t)i * eh->e_shentsize;
             uint32_t type; uint64_t flags, addr, off, size;
             memcpy(&type, sh + 4, 4); memcpy(&flags, sh + 8, 8); memcpy(&addr, sh + 16, 8); memcpy(&off, sh + 24, 8); memcpy(&size, sh + 32, 8);
-            if (type == 1 /* PROGBITS */ && (flags & 4 /* EXECINSTR */) && size && off + size <= flen) {
+            if (type == 1 /* PROGBITS */ && (flags & 4 /* EXECINSTR */) && size
+                && !(off & 3) && off <= flen && size <= flen - off
+                && addr >= base_vaddr && addr - base_vaddr <= npages * PAGE
+                && size <= npages * PAGE - (addr - base_vaddr)) {
                 code[ncode].vaddr = addr; code[ncode].size = size; code[ncode].foff = off; ncode++;
             }
         }
@@ -1180,7 +1267,8 @@ static tl_lib *map_library(const char *name, uint8_t *file, size_t flen)
         tl_log_line("ld: %s has no section headers; treating every executable segment as code", name);
         for (unsigned i = 0; i < eh->e_phnum && ncode < 16; i++) {
             const elf_phdr *p = &phs[i];
-            if (p->p_type == PT_LOAD_ && (p->p_flags & PF_X_) && p->p_offset + p->p_filesz <= flen) {
+            if (p->p_type == PT_LOAD_ && (p->p_flags & PF_X_) && !(p->p_offset & 3)
+                && p->p_offset <= flen && p->p_filesz <= flen - p->p_offset) {
                 code[ncode].vaddr = p->p_vaddr; code[ncode].size = p->p_filesz; code[ncode].foff = p->p_offset; ncode++;
             }
         }
@@ -1209,7 +1297,7 @@ static tl_lib *map_library(const char *name, uint8_t *file, size_t flen)
     if (!vx18_init()) tl_log_line("ld: no thread-specific slot for the virtual x18; instructions using x18 will not be rewritten");
 
     uint8_t *rx, *rw;
-    if (!tl_xmem_alloc((npages + nstub) * PAGE, &rx, &rw)) {
+    if (nstub > SIZE_MAX / PAGE - npages || !tl_xmem_alloc((npages + nstub) * PAGE, &rx, &rw)) {
         tl_log_line("ld: %s needs %zu MiB of executable memory and the region has %zu MiB left", name,
                     npages * PAGE >> 20, (tl_xmem_size() - tl_xmem_used()) >> 20);
         free(flags); free(phs);
@@ -1221,8 +1309,9 @@ static tl_lib *map_library(const char *name, uint8_t *file, size_t flen)
     for (unsigned i = 0; i < eh->e_phnum; i++) {
         const elf_phdr *p = &phs[i];
         if (p->p_type != PT_LOAD_ || !p->p_filesz) continue;
-        if (p->p_offset + p->p_filesz > flen || p->p_vaddr < base_vaddr
-            || p->p_vaddr - base_vaddr + p->p_filesz > npages * PAGE) {
+        if (p->p_offset > flen || p->p_filesz > flen - p->p_offset || p->p_vaddr < base_vaddr
+            || p->p_vaddr - base_vaddr > npages * PAGE
+            || p->p_filesz > npages * PAGE - (p->p_vaddr - base_vaddr)) {
             tl_log_line("ld: %s: segment %u is outside the file or the image", name, i);
             free(flags); free(phs);
             return NULL;
@@ -1231,6 +1320,7 @@ static tl_lib *map_library(const char *name, uint8_t *file, size_t flen)
     }
 
     tl_lib *L = calloc(1, sizeof(*L));
+    if (!L) { free(flags); free(phs); return NULL; }
     snprintf(L->name, sizeof(L->name), "%s", name);
     L->rx = rx; L->rw = rw; L->base_vaddr = base_vaddr; L->npages = npages; L->pflags = flags;
     L->phdr = phs; L->phnum = eh->e_phnum;
@@ -1238,15 +1328,45 @@ static tl_lib *map_library(const char *name, uint8_t *file, size_t flen)
     L->ncode = ncode;
     L->stub_rx = rx + npages * PAGE; L->stub_rw = rw + npages * PAGE; L->stub_used = 16; L->stub_cap = nstub * PAGE; L->nstub = nstub;
     { uint64_t h = (uint64_t)(uintptr_t)tl_svc_common; memcpy(L->stub_rw, &h, 8); }
-    parse_dynamic(L, dyn_v, dyn_n);
+    if (!parse_dynamic(L, dyn_v, dyn_n) || !L->strsz || L->strsz > table_capacity(L, L->strtab)
+        || L->symtab % 8 || sizeof(elf_sym) > table_capacity(L, L->symtab)
+        || L->arelasz > table_capacity(L, L->arela)
+        || (L->init && (!image_range(L, L->init, 4)
+            || !(L->pflags[(L->init - L->base_vaddr) / PAGE] & TL_PAGE_X)))
+        || (L->init_arraysz && (L->init_array % 8 || L->init_arraysz % 8
+            || !image_range(L, L->init_array, L->init_arraysz)))) {
+        free(flags); free(phs); free(L); return NULL;
+    }
+    for (int i = 0; i < L->nneeded; i++) {
+        if (L->needed[i] >= L->strsz
+            || !memchr((const char *)at(L, L->strtab) + L->needed[i], 0, (size_t)(L->strsz - L->needed[i]))) {
+            free(flags); free(phs); free(L); return NULL;
+        }
+    }
     if (L->strtab) {
         const elf_dyn *d = at(L, dyn_v);
         for (size_t i = 0; i < dyn_n / sizeof(elf_dyn) && d[i].d_tag != DT_NULL_; i++) {
-            if (d[i].d_tag == DT_SONAME_) snprintf(L->soname, sizeof(L->soname), "%s", (const char *)at(L, L->strtab) + d[i].d_val);
+            if (d[i].d_tag == DT_SONAME_) {
+                if (d[i].d_val >= L->strsz || !memchr((const char *)at(L, L->strtab) + d[i].d_val, 0,
+                                                    (size_t)(L->strsz - d[i].d_val))) {
+                    free(flags); free(phs); free(L); return NULL;
+                }
+                snprintf(L->soname, sizeof(L->soname), "%s", (const char *)at(L, L->strtab) + d[i].d_val);
+            }
         }
     }
     if (!L->soname[0]) snprintf(L->soname, sizeof(L->soname), "%s", name);
+    /* Use one validated hash representation; never read an unchecked second table. */
+    if (L->sysv_hash) L->gnu_hash = 0;
     L->nsyms = count_dynsyms(L);
+    if (!L->nsyms) { free(flags); free(phs); free(L); return NULL; }
+    for (uint32_t i = 0; i < L->nsyms; i++) {
+        const elf_sym *s = sym_at(L, i);
+        if (s->st_name >= L->strsz || !memchr((const char *)at(L, L->strtab) + s->st_name, 0,
+                                             (size_t)(L->strsz - s->st_name))) {
+            free(flags); free(phs); free(L); return NULL;
+        }
+    }
     if (L->nsyms) L->symcache = calloc(L->nsyms, sizeof(uint64_t));
     G.libs[G.nlibs++] = L;
     return L;

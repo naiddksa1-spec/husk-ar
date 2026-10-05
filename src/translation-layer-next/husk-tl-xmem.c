@@ -47,8 +47,27 @@ static bool open_platform(size_t host_bytes, char *err, size_t errlen)
 static bool open_platform(size_t host_bytes, char *err, size_t errlen)
 {
     /* TL_XMEM_MIB: size the region as a phone's would be, to see whether a game fits there */
-    if (getenv("TL_XMEM_MIB")) host_bytes = (size_t)atoi(getenv("TL_XMEM_MIB")) << 20;
+    const char *limit = getenv("TL_XMEM_MIB");
+    if (limit) {
+        char *end = NULL;
+        errno = 0;
+        unsigned long long mib = strtoull(limit, &end, 10);
+        if (!*limit || *limit < '0' || *limit > '9' || errno || *end
+            || !mib || mib > 4096 || mib > (SIZE_MAX >> 20)) {
+            snprintf(err, errlen, "invalid TL_XMEM_MIB (expected 1..4096)");
+            return false;
+        }
+        host_bytes = (size_t)mib << 20;
+    }
+    if (!host_bytes || host_bytes > SIZE_MAX - (TL_XMEM_PAGE - 1)) {
+        snprintf(err, errlen, "executable memory size overflow");
+        return false;
+    }
     size_t size = (host_bytes + TL_XMEM_PAGE - 1) & ~(size_t)(TL_XMEM_PAGE - 1);
+    if (size > SIZE_MAX / 2) {
+        snprintf(err, errlen, "executable alias size overflow");
+        return false;
+    }
     /* Reserve twice the span and put the two views side by side. adrp reaches +-4 GiB, and
      * the loader retargets code at the writable view with it, so the views must stay close:
      * left to place the alias anywhere, the kernel can put it more than 3 GiB away. */
@@ -110,10 +129,11 @@ bool tl_xmem_open(size_t host_bytes, char *err, size_t errlen)
 
 bool tl_xmem_alloc(size_t bytes, uint8_t **rx, uint8_t **rw)
 {
+    if (!bytes || bytes > SIZE_MAX - (TL_XMEM_PAGE - 1)) return false;
     size_t n = (bytes + TL_XMEM_PAGE - 1) & ~(size_t)(TL_XMEM_PAGE - 1);
     bool ok = false;
     pthread_mutex_lock(&g_x.lock);
-    if (g_x.open && n <= g_x.size - g_x.used) {
+    if (g_x.open && g_x.used <= g_x.size && n <= g_x.size - g_x.used) {
         if (rx) *rx = g_x.rx + g_x.used;
         if (rw) *rw = g_x.rw + g_x.used;
         g_x.used += n;
@@ -123,19 +143,21 @@ bool tl_xmem_alloc(size_t bytes, uint8_t **rx, uint8_t **rw)
     return ok;
 }
 
-ptrdiff_t tl_xmem_delta(void) { return g_x.rw - g_x.rx; }
+ptrdiff_t tl_xmem_delta(void) {
+    return g_x.open ? (ptrdiff_t)((uintptr_t)g_x.rw - (uintptr_t)g_x.rx) : 0;
+}
 
 bool tl_xmem_contains(const void *p)
 {
-    const uint8_t *b = p;
-    return g_x.open && ((b >= g_x.rx && b < g_x.rx + g_x.size)
-                     || (b >= g_x.rw && b < g_x.rw + g_x.size));
+    uintptr_t b = (uintptr_t)p, rx = (uintptr_t)g_x.rx, rw = (uintptr_t)g_x.rw;
+    return g_x.open && ((b >= rx && b - rx < g_x.size)
+                     || (b >= rw && b - rw < g_x.size));
 }
 
 bool tl_xmem_is_rx(const void *p)
 {
-    const uint8_t *b = p;
-    return g_x.open && b >= g_x.rx && b < g_x.rx + g_x.size;
+    uintptr_t b = (uintptr_t)p, rx = (uintptr_t)g_x.rx;
+    return g_x.open && b >= rx && b - rx < g_x.size;
 }
 
 void tl_xmem_flush(const void *rx, size_t bytes)

@@ -277,15 +277,17 @@ static int b_sem_trywait(void *g)
 static int b_sem_timedwait(void *g, const struct timespec *abs)
 {
     host_sem *s = hs(g);
-    struct timespec now, rel;
-    clock_gettime(CLOCK_REALTIME, &now);
-    rel.tv_sec = abs->tv_sec - now.tv_sec;
-    rel.tv_nsec = abs->tv_nsec - now.tv_nsec;
-    if (rel.tv_nsec < 0) { rel.tv_sec--; rel.tv_nsec += 1000000000L; }
-    if (rel.tv_sec < 0) { rel.tv_sec = 0; rel.tv_nsec = 0; }
     pthread_mutex_lock(&s->m);
     int r = 0;
-    while (s->count <= 0 && r == 0) r = pthread_cond_timedwait_relative_np(&s->c, &s->m, &rel);
+    while (s->count <= 0 && r == 0) {
+        struct timespec now, rel;
+        clock_gettime(CLOCK_REALTIME, &now);
+        rel.tv_sec = abs->tv_sec - now.tv_sec;
+        rel.tv_nsec = abs->tv_nsec - now.tv_nsec;
+        if (rel.tv_nsec < 0) { rel.tv_sec--; rel.tv_nsec += 1000000000L; }
+        if (rel.tv_sec < 0) { rel.tv_sec = 0; rel.tv_nsec = 0; }
+        r = pthread_cond_timedwait_relative_np(&s->c, &s->m, &rel);
+    }
     if (r == 0) s->count--;
     pthread_mutex_unlock(&s->m);
     if (r) { tl_set_guest_errno(tl_errno_to_guest(r)); return -1; }
@@ -426,26 +428,28 @@ static int b_setname_np(pthread_t t, const char *name)
 static int b_join(pthread_t t, void **ret) { return rc(pthread_join(t, ret)); }
 static int b_detach(pthread_t t) { return rc(pthread_detach(t)); }
 
-/* sigset_t is one 64-bit word on bionic, bit (sig-1); Darwin's is a 32-bit mask. */
-static uint32_t sigset_to_darwin(uint64_t g)
-{
-    uint32_t d = 0;
-    for (int s = 1; s < 32; s++) if (g & (1ull << (s - 1))) { int ds = tl_signal_to_darwin(s); if (ds > 0) d |= 1u << (ds - 1); }
-    return d;
-}
-static uint64_t sigset_from_darwin(uint32_t d)
-{
-    uint64_t g = 0;
-    for (int s = 1; s < 32; s++) if (d & (1u << (s - 1))) { int gs = tl_signal_from_darwin(s); if (gs > 0 && gs < 64) g |= 1ull << (gs - 1); }
-    return g;
-}
+/* Convert the guest's 64-bit signal mask to Darwin's sigset_t without relying on
+ * Darwin's private representation or size. */
 static int b_sigmask(int how, const uint64_t *set, uint64_t *old)
 {
     sigset_t ds, od;
-    int dh = how == 0 ? SIG_BLOCK : how == 1 ? SIG_UNBLOCK : SIG_SETMASK;
-    if (set) { uint32_t m = sigset_to_darwin(*set); memcpy(&ds, &m, sizeof(m)); }
+    int dh = how == 0 ? SIG_BLOCK : how == 1 ? SIG_UNBLOCK : how == 2 ? SIG_SETMASK : -1;
+    if (dh < 0) return 22;
+    sigemptyset(&ds);
+    if (set) {
+        for (int s = 1; s < 32; s++) if (*set & (1ull << (s - 1))) {
+            int dsig = tl_signal_to_darwin(s);
+            if (dsig > 0) sigaddset(&ds, dsig);
+        }
+    }
     int r = pthread_sigmask(dh, set ? &ds : NULL, old ? &od : NULL);
-    if (old) { uint32_t m; memcpy(&m, &od, sizeof(m)); *old = sigset_from_darwin(m); }
+    if (old) {
+        *old = 0;
+        for (int dsig = 1; dsig < 32; dsig++) if (sigismember(&od, dsig) == 1) {
+            int gs = tl_signal_from_darwin(dsig);
+            if (gs > 0 && gs < 64) *old |= 1ull << (gs - 1);
+        }
+    }
     return rc(r);
 }
 

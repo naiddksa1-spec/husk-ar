@@ -21,17 +21,19 @@ struct LibraryTab: View {
     @State private var query = ""
     @State private var filter = "All"
     @FocusState private var searchFocused: Bool
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
-    private let columns = [GridItem(.adaptive(minimum: 100), spacing: 12)]
+    private var columns: [GridItem] {
+        [GridItem(.adaptive(minimum: dynamicTypeSize.isAccessibilitySize ? 124 : 76), spacing: 12)]
+    }
 
     var body: some View {
         NavigationStack(path: $router.library) {
             ZStack {
-                Theme.backdrop
+                Theme.homeWallpaper
                 content
             }
             .navigationBarHidden(true)
-            .toolbar(.hidden, for: .tabBar)
             .navigationDestination(for: AndroidHost.Package.self) { app in
                 AppDetailView(app: app, onOpenGuest: onOpenGuest)
             }
@@ -47,33 +49,50 @@ struct LibraryTab: View {
 
     @ViewBuilder private var content: some View {
         ScrollView {
-            VStack(spacing: 16) {
-                HuskHeader(mark: true, title: "المكتبة") {
-                    HStack(spacing: 10) {
-                        // Android itself, from the library, whenever it is up.
-                        // It used to be reachable only while it was starting,
-                        // or by opening an app -- so once it was ready there
-                        // was no way to simply look at it.
-                        if started {
-                            CircleButton(systemImage: "rectangle.inset.filled",
-                                         action: onOpenGuest)
-                        }
-                        CircleButton(systemImage: "plus") { importing = true }
+            VStack(spacing: 20) {
+                HStack {
+                    Label("مدار", systemImage: "circle.hexagongrid")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.95))
+                    Spacer()
+                    Button { importing = true } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 20, weight: .medium))
+                            .frame(width: 46, height: 46)
+                            .background(.white.opacity(0.15), in: Circle())
                     }
+                    .foregroundStyle(.white)
+                    .buttonStyle(CardButtonStyle())
+                    .accessibilityLabel("إضافة ملف APK")
                 }
+
+                homeClock
+                quickAccess
 
                 // Always there, not behind a button. Searching is what you do
                 // with a list of apps; making it a mode you enter first is a
                 // step between you and the thing you came for.
-                if !host.packages.isEmpty { searchField }
+                if !host.packages.isEmpty {
+                    Text("تطبيقاتك")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    searchField
+                }
                 if !host.isReady { machineStrip }
                 if let busy = host.busy { busyStrip(busy) }
                 if !categories.isEmpty { chips }
 
                 if !shown.isEmpty {
-                    LazyVGrid(columns: columns, spacing: 12) {
+                    LazyVGrid(columns: columns, spacing: 14) {
                         ForEach(shown) { app in
-                            NavigationLink(value: app) {
+                            Button {
+                                if host.isReady && host.busy == nil {
+                                    host.launch(app.name) { onOpenGuest() }
+                                } else {
+                                    router.library.append(app)
+                                }
+                            } label: {
                                 AppCard(app: app, dimmed: !host.isReady)
                             }
                             .buttonStyle(CardButtonStyle())
@@ -89,9 +108,9 @@ struct LibraryTab: View {
                         }
                     }
                 } else if !query.isEmpty {
-                    EmptyState(title: "لا نتائج",
-                               message: "لا يوجد تطبيق مثبّت باسم “\(query)”.",
-                               systemImage: "magnifyingglass")
+                    Text("لا يوجد تطبيق مثبّت باسم «\(query)».")
+                        .font(.body).foregroundStyle(.white)
+                        .padding(24)
                 } else if host.packages.isEmpty && host.isReady {
                     EmptyState(title: "لا تطبيقات بعد",
                                message: "ثبّت ملف APK وسيظهر هنا. الحزم المقسّمة "
@@ -99,12 +118,71 @@ struct LibraryTab: View {
                                systemImage: "square.grid.2x2",
                                actionTitle: "تثبيت APK",
                                action: { importing = true })
+                        .huskCard()
                 }
             }
             .padding(.horizontal, 18)
             .padding(.top, 6)
-            .padding(.bottom, 28)
+            .padding(.bottom, 34)
         }
+    }
+
+    private var homeClock: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            VStack(alignment: .leading, spacing: 8) {
+                Text(context.date, format: .dateTime.hour().minute())
+                    .font(.system(size: dynamicTypeSize.isAccessibilitySize ? 64 : 82,
+                                  weight: .light, design: .rounded))
+                    .monospacedDigit()
+                    .environment(\.layoutDirection, .leftToRight)
+                    .minimumScaleFactor(0.6)
+                    .lineLimit(1)
+                    .foregroundStyle(.white)
+                Text(context.date, format: .dateTime.weekday(.wide).day().month(.wide))
+                    .font(.body.weight(.medium)).foregroundStyle(.white)
+                Label(host.isReady ? "أندرويد متصل" : "جهازك الثاني، بطريقتك",
+                      systemImage: host.isReady ? "checkmark.circle.fill" : "sparkles")
+                    .font(.footnote).foregroundStyle(.white.opacity(0.90))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 24)
+        }
+    }
+
+    private var quickAccess: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                HuskMark(size: 42)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(host.isReady ? "أندرويد متصل" : "مساحة أندرويد")
+                        .font(.headline)
+                    Text(host.isReady ? "افتح الشاشة أو اختر تطبيقاً بالأسفل."
+                         : "شغّل الضيف للوصول إلى تطبيقاتك.")
+                        .font(.subheadline).foregroundStyle(Theme.textDim)
+                }
+                Spacer(minLength: 0)
+            }
+            HStack(spacing: 10) {
+                Button(action: started ? onOpenGuest : onStartAndroid) {
+                    Label(started ? "عرض أندرويد" : "تشغيل أندرويد",
+                          systemImage: started ? "rectangle.inset.filled" : "power")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .foregroundStyle(.white)
+                        .background(Theme.action, in: Capsule())
+                }
+                Button { router.tab = .files } label: {
+                    Image(systemName: "folder.fill")
+                        .frame(width: 46, height: 44)
+                        .foregroundStyle(Theme.champagne)
+                        .background(Theme.surfaceHigh, in: Capsule())
+                }
+                .accessibilityLabel("فتح الملفات")
+            }
+            .buttonStyle(CardButtonStyle())
+        }
+        .padding(18)
+        .madarGlass(radius: 26)
     }
 
     private var searchField: some View {
@@ -166,9 +244,9 @@ struct LibraryTab: View {
                 if started { onOpenGuest() } else { onStartAndroid() }
             }
             .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(.white)
+            .foregroundStyle(Theme.onAction)
             .padding(.horizontal, 14).padding(.vertical, 8)
-            .background(Theme.accent, in: Capsule())
+            .background(Theme.action, in: Capsule())
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 13).padding(.vertical, 11)
@@ -189,7 +267,7 @@ struct LibraryTab: View {
     private var chips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                Chip(title: "All", selected: filter == "All") { filter = "All" }
+                Chip(title: "الكل", selected: filter == "All") { filter = "All" }
                 ForEach(categories, id: \.self) { c in
                     Chip(title: plural(c), selected: filter == c) { filter = c }
                 }
@@ -230,22 +308,19 @@ struct AppCard: View {
     var dimmed = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            AppIcon(path: app.iconPath, size: 46)
-                .opacity(dimmed ? 0.5 : 1)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(app.label)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.text)
-                    .lineLimit(1)
-                Text(app.category ?? app.bitness ?? " ")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.textDim)
-                    .lineLimit(1)
-            }
+        VStack(spacing: 9) {
+            AppIcon(path: app.iconPath, size: 58)
+                .opacity(dimmed ? 0.7 : 1)
+                .shadow(color: .black.opacity(0.16), radius: 8, y: 4)
+            Text(app.label)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.white)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .shadow(color: .black.opacity(0.40), radius: 3, y: 1)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .huskCard()
+        .frame(maxWidth: .infinity, alignment: .top)
+        .padding(.vertical, 10)
+        .accessibilityLabel(app.label)
     }
 }

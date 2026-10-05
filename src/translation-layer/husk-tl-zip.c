@@ -286,7 +286,12 @@ bool tl_zip_data(const tl_zip *z, const tl_zip_entry *e, size_t limit,
         return false;
     }
     const uint8_t *l = z->map + e->local_offset;
-    uint64_t data_off = e->local_offset + 30ull + rd16(l + 26) + rd16(l + 28);
+    uint64_t name_len = rd16(l + 26), extra_len = rd16(l + 28);
+    if (e->local_offset > UINT64_MAX - 30u - name_len - extra_len) {
+        fail(err, errlen, "%s: local header offset overflows", e->name);
+        return false;
+    }
+    uint64_t data_off = e->local_offset + 30u + name_len + extra_len;
     if (!in_file(z, data_off, e->csize)) {
         fail(err, errlen, "%s runs past the end of the file", e->name);
         return false;
@@ -325,6 +330,12 @@ bool tl_zip_data(const tl_zip *z, const tl_zip_entry *e, size_t limit,
     const uint8_t *in = data;
     uint8_t *dst = buf;
     int rc = Z_OK;
+    /* Even an empty deflate stream needs an output slot so zlib can consume
+     * its end marker; using avail_out == 0 makes valid empty entries fail. */
+    if (out_left == 0) {
+        zs.next_out = buf;
+        zs.avail_out = 1;
+    }
     while (rc == Z_OK) {
         if (zs.avail_in == 0 && in_left > 0) {
             uInt n = in_left > 0x40000000u ? 0x40000000u : (uInt)in_left;

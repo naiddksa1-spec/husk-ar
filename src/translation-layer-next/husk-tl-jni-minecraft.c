@@ -99,11 +99,11 @@ static void kv_load(void)
     }
     free(line); fclose(f);
 }
-static const char *kv_get(const char *key)
+static char *kv_get(const char *key)
 {
-    const char *v = NULL;
+    char *v = NULL;
     pthread_mutex_lock(&g_kv_mu);
-    for (int i = 0; i < g_nkv; i++) if (!strcmp(g_kv[i].key, key)) { v = g_kv[i].val; break; }
+    for (int i = 0; i < g_nkv; i++) if (!strcmp(g_kv[i].key, key)) { v = g_kv[i].val ? strdup(g_kv[i].val) : NULL; break; }
     pthread_mutex_unlock(&g_kv_mu);
     return v;
 }
@@ -162,7 +162,7 @@ static jobj *string_array(const char *const *v, int n)
 static void MA_internalPath(tl_jcall *c) { c->ret = vl(STR(M.data)); }
 static void MA_externalPath(tl_jcall *c) { c->ret = vl(STR(M.ext)); }
 static void MA_legacyExternalPath(tl_jcall *c) { c->ret = vl(STR("")); }       /* scoped storage: no shared /sdcard to write to */
-static void MA_legacyDeviceId(tl_jcall *c) { const char *v = kv_get("snooperId"); c->ret = vl(STR(v ? v : "")); }
+static void MA_legacyDeviceId(tl_jcall *c) { char *v = kv_get("snooperId"); c->ret = vl(STR(v ? v : "")); free(v); }
 static void MA_createUUID(tl_jcall *c) { char u[40]; new_uuid(u, false); c->ret = vl(STR(u)); }
 static void MA_setCachedDeviceId(tl_jcall *c) { kv_put("deviceId", S(c->args[0].l)); }
 static void MA_deviceModel(tl_jcall *c)
@@ -203,9 +203,9 @@ static void MA_usedMemory(tl_jcall *c) { int64_t u = total_memory() - avail_memo
 static void MA_debugMemoryInfo(tl_jcall *c) { c->ret = vj(0); }
 static void MA_totalSpace(tl_jcall *c) { struct statfs s; c->ret = vj(statfs(S(c->args[0].l), &s) == 0 ? (int64_t)s.f_blocks * s.f_bsize : 0); }
 static void MA_usableSpace(tl_jcall *c) { struct statfs s; c->ret = vj(statfs(S(c->args[0].l), &s) == 0 ? (int64_t)s.f_bavail * s.f_bsize : 0); }
-static void MA_secureGet(tl_jcall *c) { const char *v = kv_get(S(c->args[0].l)); c->ret = vl(STR(v ? v : "")); }
+static void MA_secureGet(tl_jcall *c) { char *v = kv_get(S(c->args[0].l)); c->ret = vl(STR(v ? v : "")); free(v); }
 static void MA_secureSet(tl_jcall *c) { kv_put(S(c->args[0].l), S(c->args[1].l)); }
-static void MA_kvString(tl_jcall *c, const char *key) { const char *v = kv_get(key); c->ret = vl(STR(v ? v : "")); }
+static void MA_kvString(tl_jcall *c, const char *key) { char *v = kv_get(key); c->ret = vl(STR(v ? v : "")); free(v); }
 static void MA_profileId(tl_jcall *c) { MA_kvString(c, "profileId"); }
 static void MA_profileName(tl_jcall *c) { MA_kvString(c, "profileName"); }
 static void MA_clientId(tl_jcall *c) { MA_kvString(c, "clientId"); }
@@ -268,7 +268,7 @@ static void HW_perfCores(tl_jcall *c) { int n = 6; size_t sz = sizeof(n); sysctl
 static void HW_socName(tl_jcall *c) { c->ret = vl(STR("Apple")); }
 static void HW_androidVersion(tl_jcall *c) { char v[40]; snprintf(v, sizeof(v), "Android %s", S(tl_jni_get_static("android/os/Build$VERSION", "RELEASE", "Ljava/lang/String;").l)); c->ret = vl(STR(v)); }
 static void HW_installer(tl_jcall *c) { c->ret = vl(STR("com.android.vending")); }
-static void HW_secureId(tl_jcall *c) { const char *v = kv_get("androidId"); if (!v) { char u[40]; new_uuid(u, false); u[16] = 0; kv_put("androidId", u); v = kv_get("androidId"); } c->ret = vl(STR(v)); }
+static void HW_secureId(tl_jcall *c) { char *v = kv_get("androidId"); if (!v) { char u[40]; new_uuid(u, false); u[16] = 0; kv_put("androidId", u); v = kv_get("androidId"); } c->ret = vl(STR(v ? v : "")); free(v); }
 static void HW_signatures(tl_jcall *c) { c->ret = vi(0); }
 
 static void Crash_uploadURI(tl_jcall *c) { c->ret = vl(STR("")); }
@@ -332,7 +332,7 @@ static void Store_extra(tl_jcall *c) { c->ret = vl(make("com/mojang/minecraftpe/
 
 /* -------------------------------------------------- Xbox Live / PlayFab helpers */
 
-static void XAL_deviceId(tl_jcall *c) { const char *v = kv_get("xalDeviceId"); if (!v) { char u[40]; new_uuid(u, true); kv_put("xalDeviceId", u); v = kv_get("xalDeviceId"); } c->ret = vl(STR(v)); }
+static void XAL_deviceId(tl_jcall *c) { char *v = kv_get("xalDeviceId"); if (!v) { char u[40]; new_uuid(u, true); kv_put("xalDeviceId", u); v = kv_get("xalDeviceId"); } c->ret = vl(STR(v ? v : "")); free(v); }
 static void XAL_osVersion(tl_jcall *c) { c->ret = vl(STR(S(tl_jni_get_static("android/os/Build$VERSION", "RELEASE", "Ljava/lang/String;").l))); }
 static void XAL_storagePath(tl_jcall *c) { char p[800]; snprintf(p, sizeof(p), "%s/xal", M.files); mkdir(p, 0755); c->ret = vl(STR(p)); }
 static void XAL_randomBytes(tl_jcall *c)

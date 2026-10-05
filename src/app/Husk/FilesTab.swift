@@ -91,6 +91,11 @@ struct DirectoryView: View {
                 }
 
                 if let space { storage(space) }
+                if path == FilesTab.root {
+                    HuskSpotlight(eyebrow: "جهازك الثاني",
+                                  title: "تصفّح",
+                                  detail: "ملفات أندرويد، مرتّبة في مكان واحد.")
+                }
 
                 if loading && entries.isEmpty {
                     ProgressView().tint(Theme.accent).padding(.top, 60)
@@ -122,7 +127,7 @@ struct DirectoryView: View {
         if e.isDirectory {
             NavigationLink(value: e.path) {
                 HuskRow(systemImage: "folder.fill", title: e.name,
-                        subtitle: e.modified.map(Self.when))
+                        subtitle: e.modified.map(Self.when), tint: Theme.champagne)
             }
             .buttonStyle(.plain)
         } else {
@@ -138,27 +143,27 @@ struct DirectoryView: View {
     }
 
     private func storage(_ s: (free: Int64, total: Int64)) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text("التخزين")
-                    .font(.system(size: 13, weight: .medium))
+                Label("مساحة التخزين", systemImage: "externaldrive")
+                    .font(.headline)
                     .foregroundStyle(Theme.text)
                 Spacer()
                 Text("\(AppDetailView.bytes(s.total - s.free)) من "
                    + "\(AppDetailView.bytes(s.total))")
-                    .font(.system(size: 12))
+                    .font(.subheadline)
                     .foregroundStyle(Theme.textDim)
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule().fill(Theme.surfaceHigh)
-                    Capsule().fill(Theme.accent)
+                    Capsule().fill(Theme.actionGradient)
                         .frame(width: geo.size.width * used(s))
                 }
             }
-            .frame(height: 5)
+            .frame(height: 7)
         }
-        .padding(.horizontal, 14).padding(.vertical, 13)
+        .padding(20)
         .huskCard(RoundedRectangle(cornerRadius: Theme.rowCorner, style: .continuous))
     }
 

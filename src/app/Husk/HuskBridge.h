@@ -12,6 +12,7 @@
 #define HUSK_BRIDGE_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 /* Mirrors HuskFrameInfo in husk-display.h. */

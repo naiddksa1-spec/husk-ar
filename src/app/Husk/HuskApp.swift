@@ -40,6 +40,8 @@ struct HuskApp: App {
         // Then the trap guard: without it, any brk we issue when StikDebug is
         // absent kills the process outright rather than returning an error.
         JITBootstrap.installTrapGuard()
+        // Madar's iPhone-inspired host chrome does not change the guest's UI.
+        Theme.configureChrome()
 
     }
 

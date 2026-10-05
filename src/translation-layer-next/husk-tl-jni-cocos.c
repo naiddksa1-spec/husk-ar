@@ -122,20 +122,20 @@ static void prefs_load(void)
     free(line); fclose(f);
 }
 
-static const char *pref_get(const char *key)
+static char *pref_get(const char *key)
 {
     pthread_mutex_lock(&g_prefs_mu);
     pref *p = pref_find(key);
-    const char *v = p ? p->val : NULL;
+    char *v = p && p->val ? strdup(p->val) : NULL;
     pthread_mutex_unlock(&g_prefs_mu);
     return v;
 }
 
-static void Helper_getBool(tl_jcall *c) { const char *v = pref_get(S(c->args[0].l)); c->ret = vz(v ? !strcmp(v, "true") : c->args[1].z); }
-static void Helper_getInt(tl_jcall *c) { const char *v = pref_get(S(c->args[0].l)); c->ret = vi(v ? atoi(v) : c->args[1].i); }
-static void Helper_getFloat(tl_jcall *c) { const char *v = pref_get(S(c->args[0].l)); c->ret = vf(v ? (float)atof(v) : c->args[1].f); }
-static void Helper_getDouble(tl_jcall *c) { const char *v = pref_get(S(c->args[0].l)); c->ret = vd(v ? atof(v) : c->args[1].d); }
-static void Helper_getString(tl_jcall *c) { const char *v = pref_get(S(c->args[0].l)); c->ret = vl(v ? STR(v) : (c->args[1].l ? tl_jni_ref(c->args[1].l) : NULL)); }
+static void Helper_getBool(tl_jcall *c) { char *v = pref_get(S(c->args[0].l)); c->ret = vz(v ? !strcmp(v, "true") : c->args[1].z); free(v); }
+static void Helper_getInt(tl_jcall *c) { char *v = pref_get(S(c->args[0].l)); c->ret = vi(v ? atoi(v) : c->args[1].i); free(v); }
+static void Helper_getFloat(tl_jcall *c) { char *v = pref_get(S(c->args[0].l)); c->ret = vf(v ? (float)atof(v) : c->args[1].f); free(v); }
+static void Helper_getDouble(tl_jcall *c) { char *v = pref_get(S(c->args[0].l)); c->ret = vd(v ? atof(v) : c->args[1].d); free(v); }
+static void Helper_getString(tl_jcall *c) { char *v = pref_get(S(c->args[0].l)); c->ret = vl(v ? STR(v) : (c->args[1].l ? tl_jni_ref(c->args[1].l) : NULL)); free(v); }
 static void Helper_setBool(tl_jcall *c) { prefs_put(S(c->args[0].l), c->args[1].z ? "true" : "false"); }
 static void Helper_setInt(tl_jcall *c) { char t[24]; snprintf(t, sizeof(t), "%d", c->args[1].i); prefs_put(S(c->args[0].l), t); }
 static void Helper_setFloat(tl_jcall *c) { char t[40]; snprintf(t, sizeof(t), "%.9g", (double)c->args[1].f); prefs_put(S(c->args[0].l), t); }

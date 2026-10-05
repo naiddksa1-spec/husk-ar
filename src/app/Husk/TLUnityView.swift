@@ -36,6 +36,7 @@ final class TLUnityUIView: UIView, UIKeyInput {
     /// mean time one frame takes it. Refreshed once a second from the runtime's own counters.
     private let stats = UILabel()
     private var statsTimer: Timer?
+    private var notificationTokens: [NSObjectProtocol] = []
 
     init(apk: String, dataDir: String, engine: TLNativeEngine) {
         self.apk = apk
@@ -68,15 +69,20 @@ final class TLUnityUIView: UIView, UIKeyInput {
             TLUnityUIView.installKeyboardHandler()
         }
         // The GPU is not the app's while it is in the background: stop drawing, and carry on when it returns.
-        NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { _ in
-            husk_unity_set_paused(true)
-        }
-        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            if self?.window != nil { husk_unity_set_paused(false) }
-        }
+        notificationTokens.append(NotificationCenter.default.addObserver(
+            forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { _ in
+                husk_unity_set_paused(true)
+            })
+        notificationTokens.append(NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                if self?.window != nil { husk_unity_set_paused(false) }
+            })
     }
 
-    deinit { statsTimer?.invalidate(); NotificationCenter.default.removeObserver(self) }
+    deinit {
+        statsTimer?.invalidate()
+        for token in notificationTokens { NotificationCenter.default.removeObserver(token) }
+    }
 
     private func updateStats() {
         var p = husk_unity_perf()

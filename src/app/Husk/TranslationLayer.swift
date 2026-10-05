@@ -856,9 +856,29 @@ final class TLAttemptRunner: ObservableObject {
 /// the older prototype loader.
 struct TLAttemptView: View {
     let app: TLApp
+    @State private var trustedThisLaunch = false
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        if app.report?.nativeEngine == .cocos || app.report?.nativeEngine == .minecraft {
+        if !trustedThisLaunch {
+            VStack(spacing: 20) {
+                Text("تنبيه أمني: التشغيل الأصلي غير معزول")
+                    .font(.headline)
+                Text("كود هذا APK يعمل داخل Husk وقد يصل إلى بياناته. استخدم أندرويد داخل الضيف للملفات غير الموثوقة. هذا الإذن لهذه المحاولة فقط.")
+                    .multilineTextAlignment(.center)
+                Button("تثبيت داخل أندرويد بدلاً من التشغيل الأصلي") {
+                    AndroidHost.shared.install(app.apks.map { URL(fileURLWithPath: $0) })
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                Button("أثق بهذا APK: تشغيل أصلي تجريبي") {
+                    trustedThisLaunch = true
+                }
+                .buttonStyle(.bordered)
+                Button("إلغاء") { dismiss() }
+            }
+            .padding()
+        } else if app.report?.nativeEngine == .cocos || app.report?.nativeEngine == .minecraft {
             TLCocosAttemptView(app: app)
         } else if app.report?.runsOnNativeRuntime == true {
             TLUnityAttemptView(app: app)

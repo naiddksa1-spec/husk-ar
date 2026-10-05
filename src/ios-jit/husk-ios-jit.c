@@ -23,6 +23,7 @@
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdio.h>
+#include <pthread.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/time.h>
@@ -85,12 +86,18 @@ int pipe2(int fds[2], int flags)
  * session. Goes to os_log (visible in Console.app) and stderr both. */
 static double husk_now_ms(void)
 {
-    static double base = 0;
     struct timeval tv;
+    static _Atomic uint64_t base_ms;
+    uint64_t now;
+    uint64_t base = 0;
+
     gettimeofday(&tv, NULL);
-    double t = tv.tv_sec * 1000.0 + tv.tv_usec / 1000.0;
-    if (base == 0) { base = t; }
-    return t - base;
+    now = (uint64_t)tv.tv_sec * 1000u + (uint64_t)tv.tv_usec / 1000u;
+    atomic_compare_exchange_strong_explicit(&base_ms, &base, now,
+                                             memory_order_relaxed,
+                                             memory_order_relaxed);
+    base = atomic_load_explicit(&base_ms, memory_order_relaxed);
+    return (double)(now - base);
 }
 
 #define HUSK_LOG(fmt, ...)                                                     \
@@ -301,21 +308,33 @@ static HuskDualMapping husk_ios_jit_allocate_real(size_t bytes);
 
 static HuskDualMapping husk_prewarmed;
 static bool husk_prewarm_done;
+static pthread_mutex_t husk_prewarm_lock = PTHREAD_MUTEX_INITIALIZER;
 
 HUSK_EXPORT bool husk_ios_jit_prewarm(size_t bytes)
 {
+    bool ok;
+
+    pthread_mutex_lock(&husk_prewarm_lock);
     if (husk_prewarm_done) {
-        return husk_prewarmed.rw_addr != NULL;
+        ok = husk_prewarmed.rw_addr != NULL;
+        pthread_mutex_unlock(&husk_prewarm_lock);
+        return ok;
     }
-    husk_prewarm_done = true;
     husk_prewarmed = husk_ios_jit_allocate_real(bytes);
+    husk_prewarm_done = true;
+    ok = husk_prewarmed.rw_addr != NULL;
+    pthread_mutex_unlock(&husk_prewarm_lock);
+
     fprintf(stderr, "[husk-jit] prewarm %s: %zu bytes\n",
-            husk_prewarmed.rw_addr ? "OK" : "FAILED", bytes);
-    return husk_prewarmed.rw_addr != NULL;
+            ok ? "OK" : "FAILED", bytes);
+    return ok;
 }
 
 HuskDualMapping husk_ios_jit_allocate(size_t bytes)
 {
+    HuskDualMapping result;
+
+    pthread_mutex_lock(&husk_prewarm_lock);
     /*
      * Hand back the prewarmed region when it is big enough. QEMU asks for
      * exactly tb-size, which is what prewarm was given, so this is the normal
@@ -324,7 +343,9 @@ HuskDualMapping husk_ios_jit_allocate(size_t bytes)
     if (husk_prewarmed.rw_addr && husk_prewarmed.size >= bytes) {
         fprintf(stderr, "[husk-jit] using the prewarmed region (%zu bytes)\n",
                 husk_prewarmed.size);
-        return husk_prewarmed;
+        result = husk_prewarmed;
+        pthread_mutex_unlock(&husk_prewarm_lock);
+        return result;
     }
     /*
      * No second trap after a prewarm already went unanswered.
@@ -336,14 +357,22 @@ HuskDualMapping husk_ios_jit_allocate(size_t bytes)
     if (husk_prewarm_done) {
         fprintf(stderr, "[husk-jit] prewarm failed earlier; not trapping again\n");
         HuskDualMapping none = { NULL, NULL, 0 };
+        pthread_mutex_unlock(&husk_prewarm_lock);
         return none;
     }
-    return husk_ios_jit_allocate_real(bytes);
+    result = husk_ios_jit_allocate_real(bytes);
+    pthread_mutex_unlock(&husk_prewarm_lock);
+    return result;
 }
 
 static HuskDualMapping husk_ios_jit_allocate_real(size_t bytes)
 {
     HuskDualMapping region = { NULL, NULL, 0 };
+
+    if (bytes == 0) {
+        HUSK_LOG("refusing a zero-byte JIT allocation");
+        return region;
+    }
     uint64_t n = atomic_fetch_add(&g_alloc_counter, 1) + 1;
 
     /* Cheap attach probe: brk #0x69 is answered with a constant when StikDebug
@@ -425,6 +454,7 @@ static HuskDualMapping husk_ios_jit_allocate_real(size_t bytes)
     if (kr != KERN_SUCCESS) {
         HUSK_LOG("#%llu: vm_remap failed for rx=%p size=%zu: %d (%s)",
                  (unsigned long long)n, rx, bytes, (int)kr, mach_error_string(kr));
+        vm_deallocate(mach_task_self(), (vm_address_t)rx, (vm_size_t)bytes);
         return region;
     }
 
@@ -435,6 +465,7 @@ static HuskDualMapping husk_ios_jit_allocate_real(size_t bytes)
                  (unsigned long long)n, (void *)rw, bytes, (int)kr,
                  mach_error_string(kr));
         vm_deallocate(mach_task_self(), rw, (vm_size_t)bytes);
+        vm_deallocate(mach_task_self(), (vm_address_t)rx, (vm_size_t)bytes);
         return region;
     }
 
@@ -521,8 +552,9 @@ static bool husk_page_is_executable(void *p)
     return (info.protection & VM_PROT_EXECUTE) != 0;
 }
 
-static sigjmp_buf g_probe_jump;
-static volatile sig_atomic_t g_probe_running;
+static _Thread_local sigjmp_buf g_probe_jump;
+static _Thread_local volatile sig_atomic_t g_probe_running;
+static _Thread_local bool g_probe_wp_disabled;
 
 static void husk_probe_handler(int sig)
 {
@@ -592,18 +624,31 @@ bool husk_ios_jit_mapjit_works(void)
 
     g_probe_running = 1;
     if (sigsetjmp(g_probe_jump, 1) == 0) {
+        bool wp = jit_write_protect_supported();
         // On a device with APRR the page is write-protected until asked
         // otherwise; on one without, it is plain RWX and these are no-ops.
         // The guard covers the write as well as the call, so a page that
         // refuses either fails the probe rather than the process.
-        if (jit_write_protect_supported()) { jit_write_protect(0); }
+        if (wp) {
+            jit_write_protect(0);
+            g_probe_wp_disabled = true;
+        }
         memcpy(p, kCode, sizeof(kCode));
-        if (jit_write_protect_supported()) { jit_write_protect(1); }
+        if (wp) {
+            jit_write_protect(1);
+            g_probe_wp_disabled = false;
+        }
         sys_icache_invalidate(p, sizeof(kCode));
 
         int (*fn)(void) = (int (*)(void))p;
         ok = (fn() == 0x1234);
     } else {
+        /* A protected write can fault before the normal re-enable path. Do not
+         * leave APRR write protection disabled on this thread. */
+        if (g_probe_wp_disabled) {
+            jit_write_protect(1);
+            g_probe_wp_disabled = false;
+        }
         HUSK_LOG("MAP_JIT probe: faulted while executing the page -- the mapping "
                  "was granted but is not executable");
     }

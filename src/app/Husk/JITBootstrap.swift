@@ -58,6 +58,7 @@ enum JITBootstrap {
     /// prewarm the JIT is already counted in the footprint, so subtracting it
     /// again charges for it twice and cost the guest 256 MiB.
     nonisolated(unsafe) static var prewarmed = false
+    private static let prewarmLock = NSLock()
 
     /// Take the JIT region now, while StikDebug is definitely still attached.
     ///
@@ -69,6 +70,9 @@ enum JITBootstrap {
     /// not work. So claim it first and hold it.
     @discardableResult
     static func prewarm() -> Bool {
+        prewarmLock.lock()
+        defer { prewarmLock.unlock() }
+        if prewarmed { return true }
         guard isDebuggerAttached else {
             HuskLog.log("jit", "no debugger attached yet; not prewarming")
             return false
