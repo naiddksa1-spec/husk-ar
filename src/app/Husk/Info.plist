@@ -21,7 +21,7 @@
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 
 	<key>CFBundleDisplayName</key>
-	<string>مدار</string>
+	<string>Madar</string>
 	<key>CFBundleShortVersionString</key>
 	<string>0.6.1</string>
 	<key>CFBundleVersion</key>
