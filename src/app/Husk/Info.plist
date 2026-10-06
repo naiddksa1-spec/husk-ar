@@ -5,7 +5,7 @@
 	<!-- These four are NOT optional: without CFBundleIdentifier and
 	     CFBundleExecutable the bundle will not install at all. Xcode only injects
 	     them when GENERATE_INFOPLIST_FILE is on, which it is not when a custom
-	     INFOPLIST_FILE is supplied -- so they are declared here and filled in by
+	     INFOPLIST_FILE is supplied, so they are declared here and filled in by
 	     INFOPLIST_EXPAND_BUILD_SETTINGS (on by default). -->
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
@@ -21,11 +21,11 @@
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 
 	<key>CFBundleDisplayName</key>
-	<string>IOS APP</string>
+	<string>ios app</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.6.1</string>
+	<string>0.6.2</string>
 	<key>CFBundleVersion</key>
-	<string>9</string>
+	<string>10</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UIRequiredDeviceCapabilities</key>
@@ -45,11 +45,11 @@
 		<string>stosdebug</string>
 		<string>apple-magnifier</string>
 	</array>
-	<!-- Android games may talk plain http as well as https; iOS refuses plain http unless told otherwise. -->
+	<!-- Native host networking requires TLS. QEMU's guest networking is separate. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
-		<true/>
+		<false/>
 	</dict>
 	<key>UIStatusBarHidden</key>
 	<false/>

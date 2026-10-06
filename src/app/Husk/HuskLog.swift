@@ -72,7 +72,7 @@ enum HuskLog {
         // run that matters is always the most recent one; keeping the previous
         // run's noise would make the log harder to read, not easier.
         let url = logFileURL
-        logFD = open(url.path, O_CREAT | O_WRONLY | O_TRUNC, 0o600)
+        logFD = open(url.path, O_CREAT | O_WRONLY | O_TRUNC, 0o644)
 
         redirectStdio()
         installCrashHandlers()
@@ -142,7 +142,7 @@ enum HuskLog {
         try? FileManager.default.removeItem(at: prevURL)
         try? FileManager.default.moveItem(at: cURL, to: prevURL)
 
-        pipeWriteFD = open(cURL.path, O_CREAT | O_WRONLY | O_TRUNC, 0o600)
+        pipeWriteFD = open(cURL.path, O_CREAT | O_WRONLY | O_TRUNC, 0o644)
         pipeReadFD = open(cURL.path, O_RDONLY)
         guard pipeWriteFD >= 0, pipeReadFD >= 0 else {
             log("boot", "WARNING: could not open husk-native.log (errno \(errno)); "

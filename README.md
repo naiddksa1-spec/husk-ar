@@ -1,18 +1,20 @@
-# Husk
+# ios app
 
 [![Husk Downloads](https://img.shields.io/github/downloads/leviidev/husk/total?style=for-the-badge&color=5865F2&labelColor=111111)](https://github.com/leviidev/husk/releases)
 
-Android app launcher for iOS.
+واجهة iPhone جديدة لتشغيل تطبيقات أندرويد، مبنية على مشروع Husk.
+
+هذه الحزمة تحتوي **المصدر المعدّل، وليست IPA مبنية أو موقّعة**.
+راجع [تقرير التعديلات والفحص](SECURITY-AND-CHANGES-AR.txt) و[خطوات البناء والتجربة](BUILD-AND-TEST-AR.txt).
 
 Drop in an APK, tap it, and the Android app opens full-screen.
 
 ## Builds
 
-Every push builds an unsigned `Husk.ipa` in GitHub Actions
-([build-ipa.yml](.github/workflows/build-ipa.yml)). It is attached to the run
-as an artifact, ready for AltStore, SideStore or TrollStore to sign and
-install. The first run builds QEMU and its dependencies from scratch, which
-takes a couple of hours; after that they are cached.
+شغّل GitHub Actions يدويًا من `Actions > build-ipa > Run workflow`.
+الملف الناتج، عند نجاح البناء، اسمه `ios-app-unsigned.ipa` داخل artifact
+باسم `ios-app-ipa`. يحتاج توقيعًا وأداة JIT مناسبة للجهاز.
+المشروع الداخلي واسم target بقيَا `Husk` لتجنب كسر الربط؛ الاسم الظاهر للمستخدم هو `ios app`.
 
 ## Licence
 

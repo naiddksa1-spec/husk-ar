@@ -4,6 +4,7 @@
 #include "husk-tl-framework.h"
 #include "husk-tl-internal.h"
 #include "husk-tl.h"
+#include "../translation-layer-next/husk-tl-dexindex.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -396,8 +397,9 @@ static tl_dex_method *dex_resolve_method(tl_dex_context *ctx, tl_dex_file *dex, 
 
 static tl_dex_file *parse_dex_buffer(tl_dex_context *ctx, uint8_t *data, size_t size)
 {
-    if (size < sizeof(dex_header)) return NULL;
-    if (memcmp(data, "dex\n", 4) != 0) return NULL;
+    // Validate all tables, strings and class_data before the legacy parser
+    // creates pointers into the file. Bytecode execution is still experimental.
+    if (!tl_dex_validate_bytes(data, size)) return NULL;
 
     const dex_header *hdr = (const dex_header *)data;
     tl_dex_file *dex = calloc(1, sizeof(*dex));

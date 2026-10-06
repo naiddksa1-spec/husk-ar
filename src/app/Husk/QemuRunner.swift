@@ -29,7 +29,7 @@ final class QemuRunner: ObservableObject {
         case firehose  = "guest_errors,unimp,cpu_reset,page,mmu,int,exec,in_asm"
     }
 
-    var verbosity: Verbosity = .detailed
+    var verbosity: Verbosity = .normal
 
     /// Which guest to boot.
     ///

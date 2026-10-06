@@ -1,0 +1,2753 @@
+--- a/.github/workflows/build-ipa-signed.yml
++++ b/.github/workflows/build-ipa-signed.yml
+@@ -2,6 +2,9 @@
+ 
+ on:
+   workflow_dispatch:
++
++permissions:
++  contents: read
+ 
+ jobs:
+   build:
+@@ -10,6 +13,11 @@
+     steps:
+       - name: Checkout
+         uses: actions/checkout@v4
++
++      - name: Restore script permissions and run portable regression tests
++        run: |
++          chmod +x scripts/*.sh
++          python3 tests/security_regression.py
+ 
+       - name: Select Xcode
+         run: |
+@@ -43,12 +51,12 @@
+         run: ./scripts/fetch_phase0_guest.sh
+ 
+       - name: Build and package IPA (unsigned)
+-        run: ./scripts/package_ipa.sh /tmp/Hask-unsigned.ipa
++        run: ./scripts/package_ipa.sh /tmp/ios-app-unsigned.ipa
+ 
+       - name: Upload IPA
+         uses: actions/upload-artifact@v4
+         with:
+-          name: Hask-ipa
+-          path: /tmp/Hask-unsigned.ipa
++          name: ios-app-ipa
++          path: /tmp/ios-app-unsigned.ipa
+           if-no-files-found: error
+           retention-days: 7
+--- a/BUILD-AND-TEST-AR.txt
++++ b/BUILD-AND-TEST-AR.txt
+@@ -0,0 +1,39 @@
++بناء ios app وتجربته
++
++الحزمة مصدر معدّل، وليست IPA جاهزة للتثبيت. تضم الأيقونات وSVG والاختبارات والتقرير وworkflow. لم يتوفر Xcode أو iOS SDK للبناء هنا.
++
++GitHub Actions
++1. ارفع محتويات المشروع إلى مستودع GitHub مع مجلد .github.
++2. افتح Actions ثم build-ipa ثم Run workflow.
++3. عند نجاح البناء نزّل artifact باسم ios-app-ipa.
++4. فك artifact لتحصل على ios-app-unsigned.ipa.
++5. وقّع وثبّت بأداة مناسبة مثل AltStore أو SideStore، ثم فعّل JIT المناسب لجهازك.
++
++الـ workflow يحمل مكتبات QEMU/ANGLE وfirmware من إصدار Husk upstream. الوصول إلى الإصدار والتوافق والتوقيع لم تُختبر هنا. قد تحتاج تحديث الاعتماد أو بناء المكتبات من المصدر إذا فشل تحميله أو تغيّرت واجهاته. لا تعطل الاختبارات لتجاوز فشلها.
++اسم target وscheme الداخلي Husk متعمد؛ الاسم الظاهر ios app.
++
++macOS محليًا
++بعد تجهيز المكتبات وguest المطلوبة:
++chmod +x scripts/*.sh
++python3 tests/security_regression.py
++cd src/app && xcodegen generate && cd ../..
++bash scripts/package_ipa.sh "$HOME/Desktop/ios-app-unsigned.ipa"
++
++يلزم Xcode وXcodeGen وqemu-img والاعتمادات الأصلية. راجع scripts/build_ios.sh وdocs/03-phase0-runbook.md. التغليف يمنع استخدام نسخة قديمة عند فشل البناء.
++
++تجربة الجهاز
++1. الاسم والأيقونة والتبويبات والبحث والإعدادات والملفات.
++2. التثبيت الأول وJIT والعودة من الخلفية، مع تدوين نوع الجهاز وإصدار iOS.
++3. الاستعادة ثم الإقلاع البارد، والصوت والتدوير والعودة من الضيف.
++4. APK موثوقة والتنزيل وإلغاؤه وانقطاع الشبكة وملف تالف.
++5. ملف باسمه مسافة واقتباس مفرد، ثم مشاركة السجل من الإعدادات.
++6. اترك التشغيل الأصلي التجريبي مغلقًا أولًا؛ استخدم APK موثوقة فقط إذا اختبرته.
++
++احتفظ بأول خطأ Xcode عند فشل البناء. عند فشل التشغيل احتفظ بالسجل والخطوات ونوع الجهاز وإصدار iOS. احذف الأسرار قبل مشاركة السجل.
++
++التوافق
++HTTP غير المشفر على المضيف محظور. JSON بسيط يحتاج sha256 لكل APK. بنية DEX غير صالحة أو رأس غير مدعوم يُرفض. التشغيل الأصلي يحتاج إقرار المخاطر الجديد.
++
++الأيقونات
++python3 scripts/redesign_icons.py
++يحتاج Pillow وCairoSVG. الأيقونة الرئيسية design/ios-app-icon.png.
+--- a/README.md
++++ b/README.md
+@@ -1,18 +1,20 @@
+-# Husk
++# ios app
+ 
+ [![Husk Downloads](https://img.shields.io/github/downloads/leviidev/husk/total?style=for-the-badge&color=5865F2&labelColor=111111)](https://github.com/leviidev/husk/releases)
+ 
+-Android app launcher for iOS.
++واجهة iPhone جديدة لتشغيل تطبيقات أندرويد، مبنية على مشروع Husk.
++
++هذه الحزمة تحتوي **المصدر المعدّل، وليست IPA مبنية أو موقّعة**.
++راجع [تقرير التعديلات والفحص](SECURITY-AND-CHANGES-AR.txt) و[خطوات البناء والتجربة](BUILD-AND-TEST-AR.txt).
+ 
+ Drop in an APK, tap it, and the Android app opens full-screen.
+ 
+ ## Builds
+ 
+-Every push builds an unsigned `Husk.ipa` in GitHub Actions
+-([build-ipa.yml](.github/workflows/build-ipa.yml)). It is attached to the run
+-as an artifact, ready for AltStore, SideStore or TrollStore to sign and
+-install. The first run builds QEMU and its dependencies from scratch, which
+-takes a couple of hours; after that they are cached.
++شغّل GitHub Actions يدويًا من `Actions > build-ipa > Run workflow`.
++الملف الناتج، عند نجاح البناء، اسمه `ios-app-unsigned.ipa` داخل artifact
++باسم `ios-app-ipa`. يحتاج توقيعًا وأداة JIT مناسبة للجهاز.
++المشروع الداخلي واسم target بقيَا `Husk` لتجنب كسر الربط؛ الاسم الظاهر للمستخدم هو `ios app`.
+ 
+ ## Licence
+ 
+--- a/SECURITY-AND-CHANGES-AR.txt
++++ b/SECURITY-AND-CHANGES-AR.txt
+@@ -0,0 +1,46 @@
++ios app: التعديلات ونتائج الفحص
++
++النتيجة
++نسخة مصدر معدّلة باسم ios app بواجهة iPhone جديدة وأيقونة جديدة وإصلاحات أمنية ووظيفية محددة. ليست IPA مبنية أو موقّعة، وليست شهادة بخلو المشروع من الثغرات. نجحت الاختبارات المحمولة مع 618 مدخلًا في كل تشغيل. Swift وObjective-C وربط Xcode لم يُختبر بالبناء هنا.
++المشروع ما زال يشغّل أندرويد على iOS. تغيير الواجهة لا يحوّل APK إلى تطبيقات iOS ولا يلغي JIT ومتطلبات الذاكرة.
++
++قارئ DEX
++أُصلحت قراءات خارج حدود الملفات في src/translation-layer-next/husk-tl-dexindex.c. أضيف التحقق البنيوي للرأس ومحاذاة الإزاحات وحدود الجداول والفهارس ونهاية السلاسل وأعضاء الفئات وأحجام بيانات التعليمات. ULEB128 محدود بخمسة بايتات وبحدود الملف. أُصلح تنظيف الحالات الفاشلة وحساب مجموع الفئات عند إضافة APK آخر. يستدعي قارئ DEX القديم التحقق البنيوي نفسه قبل تكوين مؤشرات داخل الملف.
++هذا ليس verifier كاملًا للـ bytecode. مفسّر التعليمات وELF/JNI/JIT يحتاجون تدقيقًا أوسع. التنفيذ داخل عملية التطبيق ليس sandbox.
++
++التنزيل والمستودعات
++أُصلح عمر ملف URLSession المؤقت: يفحصه الكود وينقله قبل انتهاء callback، لا داخل مهمة لاحقة قد تعمل بعد حذفه.
++يُشترط HTTPS وتُرفض بيانات الدخول داخل الرابط وredirect إلى HTTP. تُفحص حالة HTTP وSHA-256 قبل التثبيت. أسماء الملفات المحلية UUID بدل حقول المستودع. تُتحقق أسماء الحزم، وتُحفظ مراقبة التقدم ويعمل الإلغاء وتظهر أخطاء التنزيل.
++يُرفض الفهرس الأكبر من 64 MB وAPK الأكبر من 2 GB بعد وصولهما. هذه ليست حدودًا أثناء الاستقبال؛ تحتاج حدود استهلاك الشبكة والقرص أثناء التنزيل إلى عمل إضافي.
++البصمة من المصدر نفسه تثبت التطابق معه، لا موثوقيته المستقلة. لم تُضف مصادقة توقيع فهرس F-Droid. مصادر JSON البسيطة تحتاج sha256 لكل تطبيق، وإلا يُستبعد التطبيق.
++
++الأوامر والملفات
++أُزيل أمر shell المبني على اسم حزمة المستودع من DiscoverTab.swift. التشغيل عبر AndroidHost.launch مع التحقق واختيار نشاط الإطلاق بدل افتراض MainActivity. أضيف التحقق قبل الإزالة وجلب المعلومات والتحقق وإزالة التكرار في القوائم المحفوظة والواردة.
++في HuskBridgeFS.swift يحافظ اقتباس المسارات على الاقتباس المفرد بطريقة POSIX بدل حذفه. أضيف الاقتباس لمسارات قاعدة بيانات الأيقونات وWAL. هذه إصلاحات لمواضع محددة، وليست إثباتًا بتدقيق كل أوامر المشروع.
++
++ZIP والشبكة وصورة الضيف
++أضيف CRC وتطابق الاسم وطريقة الضغط والأعلام بين local وcentral headers، والتحقق من نهاية EOCD ورفض multi-disk. أُصلح فك deflate الفارغ والتحقق من استهلاك المدخل.
++أُغلق السماح العام بـ HTTP للمضيف، وطبقة HTTP الأصلية تتطلب HTTPS مع تحقق من المدخلات وبعض حالات فشل التخصيص. قد يمنع هذا تطبيقات تعتمد HTTP القديم. شبكة الضيف عبر QEMU منفصلة عن ATS.
++يتحقق GuestManifest.swift من أسماء الملفات والأجزاء والبصمات والأحجام وإعدادات الآلة وقائمة CPU مدعومة. لا يُعاد digest ناقص عند خطأ قراءة. فحوص التحديثات لا تتداخل وتتباعد عشر دقائق بعد النجاح.
++
++الواجهة والهوية
++الاسم الظاهر ios app، الإصدار 0.6.2، البناء 10. أُعيد رسم جميع الأيقونات الأساسية والبديلة ونسخ المعاينة، 1024×1024 وبدون شفافية. SVG داخل design/ ومولّدها scripts/redesign_icons.py.
++المكتبة شبكة أيقونات iPhone بدون بطاقات ثقيلة، والإعدادات قائمة iOS مجمعة جديدة. تغيرت شاشة الترحيب والإقلاع والأزرار والعناوين المشتركة. التصميم فاتح مع بنفسجي هادئ، وحُفظت خيارات المظهر الموجودة والعربية وRTL.
++أُعيد شريط التبويبات. فتح التطبيقات من الاكتشاف يعرض الضيف، والواجهة المخفية لا تعترض لمسه. التقدم مراحل مرصودة ووقت منقضٍ بدل زيادة مصطنعة أو وعد غير مثبت بوقت متبقٍّ.
++حُفظت أسماء target والمشروع ومعرّف الحزمة ومفاتيح البيانات الداخلية، وحقوق Husk وترخيص GPL.
++
++الأداء
++الأيقونات تُقرأ وتُصغّر خارج الخيط الرئيسي، مع cache 32 MB و256 صورة ومقاس فك مناسب للعرض. فك JSON خارج الخيط الرئيسي، وقوائم الاكتشاف lazy، وفحوص التحديثات لا تتداخل، وسجلات QEMU الافتراضية أخف.
++لم يُقَس زمن التشغيل أو FPS على iPhone. هذه تغييرات تقلل العمل المتكرر، وليست إثباتًا لتحسن بعدد ثوانٍ محدد.
++
++ما اختُبر
++python3 tests/security_regression.py: نجاح 618 مدخلًا مع UBSan.
++ASAN=1 python3 tests/security_regression.py: نجاح المدخلات نفسها مع AddressSanitizer وUBSan.
++الحالات ZIP المخزن والمضغوط والفارغ واختلاف CRC والأسماء وDEX القصير والجداول غير الصالحة وULEB128 التالف و600 تعديل عشوائي ببذرة ثابتة.
++نجح XML لكل plist وentitlements وJSON لفهارس الأيقونات وsyntax لسكربتات Bash والتحقق من مقاس الأيقونات وRGB. أُصلح تعليق XML غير صالح في Info.plist. أُزيلت مواضع snappy وtoolbar الخاصة بـ iOS 17 للحفاظ على هدف iOS 16.4.
++
++ما لم يُحسم
++تشغيل APK الأصلي داخل عملية التطبيق أخطر مسار. أضيف إقرار بالمخاطر قبل تفعيله، لكن الإقرار ليس حماية تقنية.
++لم يُبنَ Swift/Objective-C أو تُوقّع IPA أو يُختبر الصوت والجرافيكس واللمس والذاكرة على الجهاز. البيئة لا تحتوي Xcode أو iOS SDK ولا اتصال إنترنت.
++لم تُفحص مكتبات الجهات الخارجية مقابل قواعد بيانات الثغرات ولا أصالة upstream IPA التي يجلبها workflow. اختبارات parser لا تغطي كل opcode أو ELF/JNI/QEMU/JIT. لا يوجد حد أثناء استقبال كل استجابة HTTP ولا تدقيق شامل لكل تخصيص ذاكرة أو تضارب خيوط.
++استخدم APK موثوقة فقط في التشغيل الأصلي. يلزم البناء واختبارات الجهاز وتدقيق أوسع قبل الاستخدام الإنتاجي.
+--- a/design/icon-cleardark.svg
++++ b/design/icon-cleardark.svg
+@@ -0,0 +1,10 @@
++<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
++<rect width="1024" height="1024" fill="#292133"/>
++<rect x="204" y="204" width="440" height="440" rx="126" fill="none"
++      stroke="#827095" stroke-width="64"/>
++<rect x="380" y="380" width="440" height="440" rx="126" fill="#292133"
++      stroke="#dcc8f4" stroke-width="64"/>
++<path d="M380 518V506a126 126 0 0 1 126-126h12" fill="none"
++      stroke="#dcc8f4" stroke-width="64" stroke-linecap="round"/>
++<circle cx="600" cy="600" r="44" fill="#dcc8f4"/>
++</svg>--- a/design/icon-clearlight.svg
++++ b/design/icon-clearlight.svg
+@@ -0,0 +1,10 @@
++<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
++<rect width="1024" height="1024" fill="#f3eef8"/>
++<rect x="204" y="204" width="440" height="440" rx="126" fill="none"
++      stroke="#b9a2d4" stroke-width="64"/>
++<rect x="380" y="380" width="440" height="440" rx="126" fill="#f3eef8"
++      stroke="#6e45b3" stroke-width="64"/>
++<path d="M380 518V506a126 126 0 0 1 126-126h12" fill="none"
++      stroke="#6e45b3" stroke-width="64" stroke-linecap="round"/>
++<circle cx="600" cy="600" r="44" fill="#6e45b3"/>
++</svg>--- a/design/icon-dark.svg
++++ b/design/icon-dark.svg
+@@ -0,0 +1,10 @@
++<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
++<rect width="1024" height="1024" fill="#292133"/>
++<rect x="204" y="204" width="440" height="440" rx="126" fill="none"
++      stroke="#827095" stroke-width="64"/>
++<rect x="380" y="380" width="440" height="440" rx="126" fill="#292133"
++      stroke="#dcc8f4" stroke-width="64"/>
++<path d="M380 518V506a126 126 0 0 1 126-126h12" fill="none"
++      stroke="#dcc8f4" stroke-width="64" stroke-linecap="round"/>
++<circle cx="600" cy="600" r="44" fill="#dcc8f4"/>
++</svg>--- a/design/icon-default.svg
++++ b/design/icon-default.svg
+@@ -0,0 +1,10 @@
++<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
++<rect width="1024" height="1024" fill="#6e45b3"/>
++<rect x="204" y="204" width="440" height="440" rx="126" fill="none"
++      stroke="#cbb8eb" stroke-width="64"/>
++<rect x="380" y="380" width="440" height="440" rx="126" fill="#6e45b3"
++      stroke="#fcf9ff" stroke-width="64"/>
++<path d="M380 518V506a126 126 0 0 1 126-126h12" fill="none"
++      stroke="#fcf9ff" stroke-width="64" stroke-linecap="round"/>
++<circle cx="600" cy="600" r="44" fill="#fcf9ff"/>
++</svg>--- a/design/icon-tinted.svg
++++ b/design/icon-tinted.svg
+@@ -0,0 +1,10 @@
++<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
++<rect width="1024" height="1024" fill="#625568"/>
++<rect x="204" y="204" width="440" height="440" rx="126" fill="none"
++      stroke="#b6a9bc" stroke-width="64"/>
++<rect x="380" y="380" width="440" height="440" rx="126" fill="#625568"
++      stroke="#f7f0fa" stroke-width="64"/>
++<path d="M380 518V506a126 126 0 0 1 126-126h12" fill="none"
++      stroke="#f7f0fa" stroke-width="64" stroke-linecap="round"/>
++<circle cx="600" cy="600" r="44" fill="#f7f0fa"/>
++</svg>--- a/design/icon-tinteddark.svg
++++ b/design/icon-tinteddark.svg
+@@ -0,0 +1,10 @@
++<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
++<rect width="1024" height="1024" fill="#302633"/>
++<rect x="204" y="204" width="440" height="440" rx="126" fill="none"
++      stroke="#89748f" stroke-width="64"/>
++<rect x="380" y="380" width="440" height="440" rx="126" fill="#302633"
++      stroke="#ecdcf1" stroke-width="64"/>
++<path d="M380 518V506a126 126 0 0 1 126-126h12" fill="none"
++      stroke="#ecdcf1" stroke-width="64" stroke-linecap="round"/>
++<circle cx="600" cy="600" r="44" fill="#ecdcf1"/>
++</svg>--- a/design/icon-tintedlight.svg
++++ b/design/icon-tintedlight.svg
+@@ -0,0 +1,10 @@
++<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
++<rect width="1024" height="1024" fill="#eee7f2"/>
++<rect x="204" y="204" width="440" height="440" rx="126" fill="none"
++      stroke="#b5a3bd" stroke-width="64"/>
++<rect x="380" y="380" width="440" height="440" rx="126" fill="#eee7f2"
++      stroke="#68516f" stroke-width="64"/>
++<path d="M380 518V506a126 126 0 0 1 126-126h12" fill="none"
++      stroke="#68516f" stroke-width="64" stroke-linecap="round"/>
++<circle cx="600" cy="600" r="44" fill="#68516f"/>
++</svg>--- a/scripts/redesign_icons.py
++++ b/scripts/redesign_icons.py
+@@ -0,0 +1,57 @@
++#!/usr/bin/env python3
++"""Reproducible, opaque iPhone app icons. Requires Pillow and CairoSVG."""
++from pathlib import Path
++import io
++from PIL import Image
++import cairosvg
++
++ROOT = Path(__file__).resolve().parents[1]
++APP = ROOT / "src/app/Husk"
++ART = ROOT / "design"
++
++def svg(background, foreground, secondary):
++    return f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
++<rect width="1024" height="1024" fill="{background}"/>
++<rect x="204" y="204" width="440" height="440" rx="126" fill="none"
++      stroke="{secondary}" stroke-width="64"/>
++<rect x="380" y="380" width="440" height="440" rx="126" fill="{background}"
++      stroke="{foreground}" stroke-width="64"/>
++<path d="M380 518V506a126 126 0 0 1 126-126h12" fill="none"
++      stroke="{foreground}" stroke-width="64" stroke-linecap="round"/>
++<circle cx="600" cy="600" r="44" fill="{foreground}"/>
++</svg>'''
++
++def main():
++    ART.mkdir(exist_ok=True)
++    palettes = {
++        "default": ("#6e45b3", "#fcf9ff", "#cbb8eb"),
++        "dark": ("#292133", "#dcc8f4", "#827095"),
++        "tinted": ("#625568", "#f7f0fa", "#b6a9bc"),
++        "clearlight": ("#f3eef8", "#6e45b3", "#b9a2d4"),
++        "cleardark": ("#292133", "#dcc8f4", "#827095"),
++        "tintedlight": ("#eee7f2", "#68516f", "#b5a3bd"),
++        "tinteddark": ("#302633", "#ecdcf1", "#89748f"),
++    }
++    images = {}
++    for name, palette in palettes.items():
++        source = svg(*palette)
++        (ART / f"icon-{name}.svg").write_text(source)
++        images[name] = Image.open(io.BytesIO(cairosvg.svg2png(
++            bytestring=source.encode(), output_width=1024, output_height=1024))).convert("RGB")
++    primary = APP / "Assets.xcassets/AppIcon.appiconset"
++    for kind, file in [("default","Icon-Default.png"), ("dark","Icon-Dark.png"),
++                       ("tinted","Icon-Tinted.png")]:
++        images[kind].save(primary/file, optimize=True)
++    for variant, kind in [("ClearLight","clearlight"),("ClearDark","cleardark"),
++                          ("TintedLight","tintedlight"),("TintedDark","tinteddark")]:
++        folder = APP / f"Assets.xcassets/AppIcon{variant}.appiconset"
++        for name in ("Icon-1024.png", "Icon.png"):
++            images[kind].save(folder/name, optimize=True)
++    for kind in ("default","dark","clearlight","cleardark","tintedlight","tinteddark"):
++        images[kind].resize((256,256), Image.Resampling.LANCZOS).save(
++            APP / f"Resources/icon-{kind}.png", optimize=True)
++    images["default"].save(ART/"ios-app-icon.png", optimize=True)
++    print("Redesigned all primary and alternate icon assets and bundled previews.")
++
++if __name__ == "__main__":
++    main()
+--- a/src/app/Husk/AppDetailView.swift
++++ b/src/app/Husk/AppDetailView.swift
+@@ -10,6 +10,7 @@
+     static let shared = Router()
+ 
+     @Published var tab: HuskTab = .library
++    @Published var wantsGuestScreen = false
+     /// The app pages pushed on top of the library.
+     @Published var library: [AndroidHost.Package] = []
+     /// Directories pushed on top of the Files root.
+--- a/src/app/Husk/AppSource.swift
++++ b/src/app/Husk/AppSource.swift
+@@ -1,4 +1,44 @@
+ import Foundation
++import Combine
++
++// Repository fields are untrusted, including names used in paths and commands.
++enum SourceValidation {
++    static func httpsURL(_ value: String) -> URL? {
++        guard let url = URL(string: value), url.scheme?.lowercased() == "https",
++              let host = url.host, !host.isEmpty, url.user == nil, url.password == nil
++        else { return nil }
++        return url
++    }
++    static func package(_ value: String) -> Bool {
++        value.count <= 255 && value.range(
++            of: #"^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$"#,
++            options: .regularExpression) != nil
++    }
++    static func digest(_ value: String?) -> String? {
++        guard let value, value.count == 64, value.utf8.allSatisfy({
++            (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0)
++        }) else { return nil }
++        return value.lowercased()
++    }
++    static func fileName(_ value: String) -> Bool {
++        !value.isEmpty && value != "." && value != ".." && value.count <= 255
++            && !value.contains("/") && !value.contains("\\")
++            && !value.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) }
++    }
++}
++
++private final class SourceTransport: NSObject, URLSessionTaskDelegate {
++    func urlSession(_ session: URLSession, task: URLSessionTask,
++                    willPerformHTTPRedirection response: HTTPURLResponse,
++                    newRequest request: URLRequest,
++                    completionHandler: @escaping (URLRequest?) -> Void) {
++        guard let url = request.url,
++              SourceValidation.httpsURL(url.absoluteString) != nil else {
++            completionHandler(nil); return
++        }
++        completionHandler(request)
++    }
++}
+ 
+ // MARK: - Internal Model
+ struct AppSource: Identifiable, Equatable {
+@@ -15,6 +55,7 @@
+     let downloadURL: String
+     let iconURL: String
+     let localizedDescription: String
++    var expectedSHA256: String? = nil
+     var id: String { bundleIdentifier }
+ }
+ 
+@@ -39,7 +80,11 @@
+     let description: String?
+     let icon: String?
+ }
+-private struct FDroidPackage: Codable { let apkName: String; let versionName: String }
++private struct FDroidPackage: Codable {
++    let apkName, versionName: String
++    let versionCode: Int64?
++    let hash, hashType: String?
++}
+ 
+ // MARK: - Husk Simple Schema
+ private struct HuskSimpleSource: Codable {
+@@ -47,6 +92,7 @@
+ }
+ private struct SourceAppCodable: Codable {
+     let name, bundleIdentifier, version, downloadURL, iconURL, localizedDescription: String
++    let sha256: String?
+ }
+ 
+ // MARK: - Manager
+@@ -58,6 +104,11 @@
+     @Published var loadingSources: Set<String> = Set<String>()
+     @Published var fetchErrors: [String: String] = [String: String]()
+     @Published var downloadProgress: [String: Double] = [String: Double]()
++    @Published var downloadErrors: [String: String] = [:]
++    private var downloads: [String: URLSessionDownloadTask] = [:]
++    private var observations: [String: NSKeyValueObservation] = [:]
++    private var lastFetch: Date?
++    private let transport = SourceTransport()
+ 
+     var isLoading: Bool { !loadingSources.isEmpty }
+ 
+@@ -69,21 +120,25 @@
+         }
+     }
+ 
+-    private let session: URLSession = {
+-        let cfg = URLSessionConfiguration.default
++    private lazy var session: URLSession = {
++        let cfg = URLSessionConfiguration.ephemeral
+         cfg.timeoutIntervalForRequest = 120
+         cfg.timeoutIntervalForResource = 300
+-        return URLSession(configuration: cfg)
++        return URLSession(configuration: cfg, delegate: transport, delegateQueue: nil)
+     }()
+ 
+     init() {
+         if let saved = UserDefaults.standard.stringArray(forKey: "HuskSourceURLs"), !saved.isEmpty {
+-            sourceURLs = saved
++            sourceURLs = Array(Set(saved.filter { SourceValidation.httpsURL($0) != nil })).sorted()
+         }
+     }
+ 
+     // Fetch everything (called on first appear / manual refresh)
+-    func fetchSources() async {
++    func fetchSources(force: Bool = false) async {
++        guard !isLoading else { return }
++        if !force, let lastFetch, Date().timeIntervalSince(lastFetch) < 300,
++           !sources.isEmpty { return }
++        lastFetch = Date()
+         for urlString in sourceURLs {
+             if !sources.contains(where: { $0.identifier == urlString }) || loadingSources.isEmpty {
+                 await fetchSource(urlString: urlString)
+@@ -93,6 +148,10 @@
+ 
+     // Add a new source and fetch ONLY that one
+     func addSource(urlString: String) async {
++        guard SourceValidation.httpsURL(urlString) != nil else {
++            fetchErrors[urlString] = "استخدم رابط HTTPS صالحًا بدون بيانات دخول."
++            return
++        }
+         guard !sourceURLs.contains(urlString) else { return }
+         sourceURLs.append(urlString)
+         await fetchSource(urlString: urlString)
+@@ -100,8 +159,9 @@
+ 
+     // Fetch a single source by URL
+     func fetchSource(urlString: String) async {
+-        guard let url = URL(string: urlString) else {
+-            fetchErrors[urlString] = "رابط غير صالح"
++        guard !loadingSources.contains(urlString) else { return }
++        guard let url = SourceValidation.httpsURL(urlString) else {
++            fetchErrors[urlString] = "رابط HTTPS غير صالح"
+             return
+         }
+ 
+@@ -111,19 +171,41 @@
+         defer { loadingSources.remove(urlString) }
+ 
+         do {
+-            let (data, _) = try await session.data(from: url)
++            let (file, response) = try await session.download(from: url)
++            defer { try? FileManager.default.removeItem(at: file) }
++            try Self.validate(response)
++            let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
++            guard size > 0, size <= 64 * 1024 * 1024 else {
++                throw Self.failure("الفهرس فارغ أو أكبر من 64 MB.")
++            }
++            let data = try Data(contentsOf: file, options: .mappedIfSafe)
+ 
+             // Try F-Droid v1 format
+-            if let fdroid = try? JSONDecoder().decode(FDroidIndex.self, from: data) {
++            let fdroidIndex = await Task.detached(priority: .utility) {
++                try? JSONDecoder().decode(FDroidIndex.self, from: data)
++            }.value
++            if let fdroid = fdroidIndex {
+                 let baseURL = fdroid.repo.address
++                guard SourceValidation.httpsURL(baseURL) != nil else {
++                    throw Self.failure("المصدر يعلن رابط تنزيل غير آمن.")
++                }
+                 var apps: [SourceApp] = []
++                var seen: Set<String> = []
+                 for fApp in fdroid.apps {
+-                    guard let pkgs = fdroid.packages[fApp.packageName], let latest = pkgs.first else { continue }
++                    guard SourceValidation.package(fApp.packageName),
++                          seen.insert(fApp.packageName).inserted,
++                          let latest = fdroid.packages[fApp.packageName]?.max(by: {
++                              ($0.versionCode ?? 0) < ($1.versionCode ?? 0)
++                          }), SourceValidation.fileName(latest.apkName),
++                          latest.hashType?.lowercased() == "sha256",
++                          let digest = SourceValidation.digest(latest.hash) else { continue }
+                     let loc = fApp.localized?["en-US"] ?? fApp.localized?.values.first
+                     let appName = fApp.name ?? loc?.name ?? fApp.packageName
+                     let appSummary = fApp.summary ?? loc?.summary ?? fApp.description ?? loc?.description ?? ""
+                     let appIcon = fApp.icon ?? loc?.icon
+-                    let iconURL = appIcon.map { "\(baseURL)/icons/\($0)" } ?? ""
++                    let iconURL = appIcon.flatMap {
++                        SourceValidation.fileName($0) ? "\(baseURL)/icons/\($0)" : nil
++                    } ?? ""
+                     
+                     apps.append(SourceApp(
+                         name: appName,
+@@ -131,7 +213,8 @@
+                         version: latest.versionName,
+                         downloadURL: "\(baseURL)/\(latest.apkName)",
+                         iconURL: iconURL,
+-                        localizedDescription: appSummary
++                        localizedDescription: appSummary,
++                        expectedSHA256: digest
+                     ))
+                 }
+                 apps.sort { $0.name.lowercased() < $1.name.lowercased() }
+@@ -139,11 +222,19 @@
+                 upsert(source: source)
+             }
+             // Fallback: Husk simple format
+-            else if let simple = try? JSONDecoder().decode(HuskSimpleSource.self, from: data) {
+-                let apps = simple.apps.map {
+-                    SourceApp(name: $0.name, bundleIdentifier: $0.bundleIdentifier,
+-                              version: $0.version, downloadURL: $0.downloadURL,
+-                              iconURL: $0.iconURL, localizedDescription: $0.localizedDescription)
++            else if let simple = await Task.detached(priority: .utility, operation: {
++                try? JSONDecoder().decode(HuskSimpleSource.self, from: data)
++            }).value {
++                var seen: Set<String> = []
++                let apps = simple.apps.compactMap { item -> SourceApp? in
++                    guard SourceValidation.package(item.bundleIdentifier),
++                          SourceValidation.httpsURL(item.downloadURL) != nil,
++                          let digest = SourceValidation.digest(item.sha256),
++                          seen.insert(item.bundleIdentifier).inserted else { return nil }
++                    return SourceApp(name: item.name, bundleIdentifier: item.bundleIdentifier,
++                              version: item.version, downloadURL: item.downloadURL,
++                              iconURL: SourceValidation.httpsURL(item.iconURL)?.absoluteString ?? "",
++                              localizedDescription: item.localizedDescription, expectedSHA256: digest)
+                 }
+                 let source = AppSource(name: simple.name, identifier: urlString, apps: apps)
+                 upsert(source: source)
+@@ -164,6 +255,7 @@
+     }
+ 
+     private func upsert(source: AppSource) {
++        guard sourceURLs.contains(source.identifier) else { return }
+         if let idx = sources.firstIndex(where: { $0.identifier == source.identifier }) {
+             sources[idx] = source
+         } else {
+@@ -173,30 +265,73 @@
+ 
+     // MARK: - APK Download + Install
+ 
++    nonisolated private static func failure(_ message: String) -> NSError {
++        NSError(domain: "ios-app.source", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
++    }
++
++    nonisolated private static func validate(_ response: URLResponse?) throws {
++        guard let http = response as? HTTPURLResponse,
++              (200...299).contains(http.statusCode), let url = http.url,
++              SourceValidation.httpsURL(url.absoluteString) != nil else {
++            throw failure("فشل التنزيل أو رفض الخادم الطلب.")
++        }
++    }
++
++    func cancelDownload(_ id: String) { downloads[id]?.cancel() }
++
+     func downloadAndInstall(app: SourceApp) {
+-        guard let url = URL(string: app.downloadURL) else { return }
++        guard downloads[app.id] == nil else { return }
++        guard let url = SourceValidation.httpsURL(app.downloadURL),
++              SourceValidation.package(app.bundleIdentifier),
++              let expected = SourceValidation.digest(app.expectedSHA256) else {
++            downloadErrors[app.id] = "التنزيل يحتاج HTTPS وبصمة SHA-256 صالحة."
++            return
++        }
++        downloadErrors.removeValue(forKey: app.id)
+         downloadProgress[app.bundleIdentifier] = 0.01
+         HuskLog.log("sources", "Downloading \(app.name)")
+ 
+-        let task = URLSession.shared.downloadTask(with: url) { localURL, _, error in
++        let task = session.downloadTask(with: url) { localURL, response, error in
++            // The temporary URL expires when this callback returns, so move it
++            // synchronously before scheduling anything on the main actor.
++            let result: Result<URL, Error>
++            do {
++                if let error { throw error }
++                try Self.validate(response)
++                guard let localURL else { throw Self.failure("لم يصل ملف التطبيق.") }
++                let size = try localURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
++                guard size > 0, size <= 2_147_483_648 else {
++                    throw Self.failure("ملف APK فارغ أو أكبر من 2 GB.")
++                }
++                guard DigestWriter.ofFile(at: localURL.path) == expected else {
++                    throw Self.failure("بصمة الملف لا تطابق المصدر. لم يُثبّت التطبيق.")
++                }
++                let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
++                let dir = docs.appendingPathComponent("Downloaded_APKs", isDirectory: true)
++                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
++                let dest = dir.appendingPathComponent(UUID().uuidString + ".apk")
++                try FileManager.default.moveItem(at: localURL, to: dest)
++                result = .success(dest)
++            } catch { result = .failure(error) }
+             Task { @MainActor in
+-                self.downloadProgress.removeValue(forKey: app.bundleIdentifier)
+-                guard let localURL, error == nil else {
+-                    HuskLog.log("sources", "Download failed: \(String(describing: error))")
+-                    return
+-                }
+-                let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+-                let downloadDir = docs.appendingPathComponent("Downloaded_APKs")
+-                try? FileManager.default.createDirectory(at: downloadDir, withIntermediateDirectories: true, attributes: nil)
+-                let dest = downloadDir.appendingPathComponent("\(app.bundleIdentifier)-\(app.version).apk")
+-                try? FileManager.default.removeItem(at: dest)
+-                if (try? FileManager.default.moveItem(at: localURL, to: dest)) != nil {
+-                    AndroidHost.shared.install([dest])
+-                }
+-            }
+-        }
+-        task.progress.observe(\.fractionCompleted) { progress, _ in
+-            Task { @MainActor in self.downloadProgress[app.bundleIdentifier] = progress.fractionCompleted }
++                self.observations.removeValue(forKey: app.id)
++                self.downloads.removeValue(forKey: app.id)
++                self.downloadProgress.removeValue(forKey: app.id)
++                switch result {
++                case .success(let dest): AndroidHost.shared.install([dest])
++                case .failure(let error):
++                    if (error as NSError).code != NSURLErrorCancelled {
++                        self.downloadErrors[app.id] = error.localizedDescription
++                    }
++                }
++            }
++        }
++        downloads[app.id] = task
++        observations[app.id] = task.progress.observe(\.fractionCompleted) { progress, _ in
++            Task { @MainActor in
++                guard self.downloads[app.id] != nil else { return }
++                self.downloadProgress[app.id] = max(0, min(progress.fractionCompleted, 1))
++            }
+         }
+         task.resume()
+     }
+--- a/src/app/Husk/BootScreen.swift
++++ b/src/app/Husk/BootScreen.swift
+@@ -18,9 +18,6 @@
+     @State private var phrase = 0
+     @State private var began = Date()
+     @State private var now = Date()
+-    @State private var pulse = false
+-    /// When bootProgress last moved, so the bar can creep between milestones.
+-    @State private var lastStep = Date()
+ 
+     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+     private let rotate = Timer.publish(every: 3.4, on: .main, in: .common).autoconnect()
+@@ -29,18 +26,9 @@
+     /// looking at the screen, and the jokes should not repeat before the
+     /// information does.
+     private static let phrases = [
+-        "استعد للروعة",
+-        "نوقظ أندرويد",
+-        "نعلّم الآيفون لغة أندرويد",
+-        "هذا نظام تشغيل كامل — اصبر علينا شوي",
+-        "تطبيق من Levi",
+-        "ادعمنا بنجمة على المستودع إن أعجبتك الفكرة",
+-        "نترجم arm64 كتلةً بكتلة",
+-        "لا، لم يتجمّد",
+-        "نجهّز نظام الضيف",
+-        "يستحق الانتظار تقريبًا",
+-        "نتفاوض مع JIT",
+-        "قربنا نوصل",
++        "يُستعاد الجهاز المحفوظ إن كان متاحًا.",
++        "الإقلاع الأول قد يستغرق عدة دقائق.",
++        "تقدر تتصفح مكتبتك أثناء التشغيل.",
+     ]
+ 
+     var body: some View {
+@@ -51,18 +39,15 @@
+                 Spacer()
+ 
+                 HuskMark(size: 96)
+-                    .shadow(color: Theme.accent.opacity(pulse ? 0.45 : 0.15),
+-                            radius: pulse ? 34 : 18, y: 10)
+-                    .animation(.easeInOut(duration: 1.8).repeatForever(autoreverses: true),
+-                               value: pulse)
+-                    .onAppear { pulse = true }
+ 
+-                Text("HUSK")
+-                    .font(.system(size: 22, weight: .semibold))
+-                    .tracking(9)
++                Text("ios app")
++                    .font(.system(size: 32, weight: .bold))
++                    .tracking(-0.5)
+                     .foregroundStyle(Theme.text)
+-                    .padding(.leading, 9)
+                     .padding(.top, 18)
++                Text("نجهّز مساحتك")
++                    .font(.title3.weight(.medium))
++                    .padding(.top, 8)
+ 
+                 // The line that talks. Keyed on the index so each one fades
+                 // into the next rather than snapping.
+@@ -93,7 +78,7 @@
+                 // An escape hatch, but not an invitation: it turns up only once
+                 // waiting has stopped being novel.
+                 if now.timeIntervalSince(began) > 8 {
+-                    Button("استخدم Husk أثناء الإقلاع", action: onSkip)
++                    Button("تصفّح المكتبة أثناء التشغيل", action: onSkip)
+                         .font(.system(size: 13, weight: .medium))
+                         .foregroundStyle(Theme.textDim)
+                         .padding(.top, 14)
+@@ -103,7 +88,6 @@
+             .padding(.bottom, 26)
+         }
+         .onReceive(tick) { now = $0 }
+-        .onChange(of: runner.bootProgress) { _ in lastStep = Date() }
+         .onReceive(rotate) { _ in
+             withAnimation(.easeInOut(duration: 0.45)) { phrase += 1 }
+         }
+@@ -117,7 +101,7 @@
+                     Capsule().fill(Theme.surfaceHigh)
+                     Capsule().fill(Theme.accent)
+                         .frame(width: geo.size.width * fraction)
+-                        .animation(.snappy(duration: 0.4), value: fraction)
++                        .animation(.easeOut(duration: 0.25), value: fraction)
+                 }
+             }
+             .frame(height: 5)
+@@ -137,46 +121,17 @@
+     }
+ 
+     private var fraction: CGFloat {
+-        // Never zero: a bar with nothing in it reads as stuck rather than as
+-        // early, and the guest says nothing at all for the first few seconds.
+-        max(CGFloat(shown) / 100, 0.03)
++        CGFloat(shown) / 100
+     }
+ 
+-    /// Progress as shown. The real number only moves when a milestone line appears,
+-    /// and late in a cold boot those are minutes apart. In between, the bar gains 1%
+-    /// every 30 seconds. It stops one short of the next milestone and never passes 95%,
+-    /// so it can never claim more progress than the guest has made.
++    /// Only observed boot milestones, never fabricated time-based progress.
+     private var shown: Int {
+-        let real = runner.bootProgress
+-        guard real > 0, real < 100, !QemuRunner.didRestore else { return real }
+-        let next = QemuRunner.bootMilestones.map { $0.2 }.first { $0 > real } ?? 100
+-        let creep = Int(now.timeIntervalSince(lastStep) / 30)
+-        return max(real, min(real + creep, next - 1, 95))
++        max(0, min(runner.bootProgress, 100))
+     }
+ 
+-    /// An estimate from this boot's own pace, not from a number someone typed
+-    /// in. Withheld until there is enough of a curve to divide by, and dropped
+-    /// again near the end, where being wrong is most annoying.
++    /// Elapsed time, not an unverified promise about how long is left.
+     private var remaining: String? {
+-        let done = Double(runner.bootProgress)
+-        // Past zygote the remaining time is mostly app compilation, and the early
+-        // pace says nothing about it. The estimate kept promising "about a minute"
+-        // for ten minutes, so show elapsed time instead.
+-        if done >= 58, !QemuRunner.didRestore {
+-            let mins = Int(now.timeIntervalSince(QemuRunner.bootStarted) / 60)
+-            return mins < 1 ? "أول إقلاع يستغرق 5–15 دقيقة"
+-                            : "\(mins) د · أول إقلاع يستغرق 5–15 دقيقة"
+-        }
+-        guard done >= 8, done <= 92 else { return nil }
+-        let elapsed = now.timeIntervalSince(began)
+-        guard elapsed > 6 else { return nil }
+-        let total = elapsed / (done / 100)
+-        let left = total - elapsed
+-        guard left > 2, left < 15 * 60 else { return nil }
+-        if left < 90 {
+-            let rounded = Int((left / 5).rounded()) * 5
+-            return "بقي نحو \(max(rounded, 5)) ثوانٍ"
+-        }
+-        return "بقي نحو \(Int((left / 60).rounded())) دقائق"
++        let elapsed = max(0, Int(now.timeIntervalSince(began)))
++        return elapsed < 60 ? "\(elapsed) ثانية" : "\(elapsed / 60) دقيقة"
+     }
+ }
+--- a/src/app/Husk/ContentView.swift
++++ b/src/app/Husk/ContentView.swift
+@@ -1,6 +1,7 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ import SwiftUI
+ import UIKit
++import ImageIO
+ 
+ /// Routes between the four things Husk can be doing.
+ ///
+@@ -25,7 +26,7 @@
+     /// True while the launch boot screen is up, rather than the library.
+     @State private var booting = false
+     @Environment(\.scenePhase) private var scenePhase
+-    @AppStorage(Theme.Appearance.key) private var appearance = Theme.Appearance.dark
++    @AppStorage(Theme.Appearance.key) private var appearance = Theme.Appearance.light
+ 
+     var body: some View {
+         ZStack {
+@@ -58,6 +59,7 @@
+                     .tag(HuskTab.settings)
+             }
+             .opacity(showGuestScreen && started && runner.isRunning ? 0 : 1)
++            .allowsHitTesting(!(showGuestScreen && started && runner.isRunning))
+ 
+             // Outcomes, over whichever tab is showing. Above the tab bar rather
+             // than over it: a message that covers the way out of the screen it
+@@ -72,7 +74,7 @@
+                 }
+                 .task(id: toast.id) {
+                     try? await Task.sleep(nanoseconds: 4_500_000_000)
+-                    withAnimation(.snappy) {
++                    withAnimation(.easeOut(duration: 0.22)) {
+                         if host.toast?.id == toast.id { host.toast = nil }
+                     }
+                 }
+@@ -109,8 +111,14 @@
+         // window rather than with .preferredColorScheme — see Theme.apply.
+         .onAppear { Theme.apply(appearance) }
+         .onChange(of: appearance) { Theme.apply($0) }
+-        .animation(.snappy(duration: 0.22), value: showGuestScreen)
+-        .animation(.snappy(duration: 0.25), value: host.toast)
++        .onChange(of: router.wantsGuestScreen) { requested in
++            if requested {
++                showGuestScreen = true
++                router.wantsGuestScreen = false
++            }
++        }
++        .animation(.easeOut(duration: 0.22), value: showGuestScreen)
++        .animation(.easeOut(duration: 0.25), value: host.toast)
+         .fullScreenCover(isPresented: $showOnboarding) {
+             OnboardingView {
+                 showOnboarding = false
+@@ -357,7 +365,7 @@
+ 
+                         Menu {
+                             Button { onBack() } label: {
+-                                Label("رجوع إلى Husk", systemImage: "chevron.left")
++                                Label("رجوع إلى ios app", systemImage: "chevron.left")
+                             }
+                             // Android's own Home key, over the bridge. Three-button
+                             // navigation is not drawn in this guest, so without it
+@@ -442,10 +450,9 @@
+                     .shadow(color: Theme.accent.opacity(0.3), radius: 24, y: 10)
+                 // Letterspaced, as a wordmark rather than a heading: this is
+                 // the only screen in the app that is allowed to be a title card.
+-                Text("HUSK")
++                Text("ios app")
+                     .font(.system(size: 26, weight: .semibold))
+-                    .tracking(10)
+-                    .padding(.leading, 10)
++                    .tracking(-0.5)
+                 Text("تطبيقات أندرويد، على آيفونك")
+                     .font(.system(size: 13))
+                     .foregroundStyle(Theme.textDim)
+@@ -522,7 +529,7 @@
+                 }
+             case .missing:
+                 VStack(spacing: 12) {
+-                    Text("يحتاج Husk إلى بيئة تشغيل أندرويد — حوالي 760 ميغابايت. أما أندرويد نفسه فيُنزَّل بعد ذلك بواسطة بيئة التشغيل.")
++                    Text("يحتاج ios app إلى بيئة تشغيل أندرويد بحجم كبير. يُنزّل نظام أندرويد بعد تجهيز البيئة، وقد يحتاج عدة جيجابايت من مساحة الجهاز.")
+                         .font(.callout).foregroundStyle(.secondary)
+                         .multilineTextAlignment(.center).padding(.horizontal, 36)
+                     Button("تنزيل بيئة أندرويد") {
+@@ -565,6 +572,15 @@
+     /// box -- which is most of why the grid looked like a debug list. The size
+     /// belongs to whoever is placing it.
+     var size: CGFloat = 40
++    @State private var loadedImage: UIImage?
++    @Environment(\.displayScale) private var displayScale
++    private var loadKey: String {
++        var modified: Date?
++        if let path, let attributes = try? FileManager.default.attributesOfItem(atPath: path) {
++            modified = attributes[.modificationDate] as? Date
++        }
++        return "\(path ?? "")|\(size)|\(displayScale)|\(modified?.timeIntervalSince1970 ?? 0)"
++    }
+ 
+     /// Proportional, so a large icon is not rounded like a small one. This is
+     /// close to the ratio iOS uses for a home screen icon.
+@@ -572,7 +588,7 @@
+ 
+     var body: some View {
+         Group {
+-            if let path, let image = UIImage(contentsOfFile: path) {
++            if let image = loadedImage {
+                 Image(uiImage: image)
+                     .resizable()
+                     .interpolation(.medium)
+@@ -593,6 +609,44 @@
+         // Rounded like a launcher would draw it. Android icons are square
+         // PNGs; nothing else gives them an app-like shape.
+         .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
++        .task(id: loadKey) {
++            let key = loadKey
++            let pixels = min(512, max(1, Int(size * displayScale)))
++            let file = path
++            let image = await Task.detached(priority: .utility) {
++                AppIconCache.load(path: file, key: key, pixels: pixels)
++            }.value
++            guard !Task.isCancelled else { return }
++            loadedImage = image
++        }
++    }
++}
++
++private enum AppIconCache {
++    static let images: NSCache<NSString, UIImage> = {
++        let cache = NSCache<NSString, UIImage>()
++        cache.totalCostLimit = 32 * 1024 * 1024
++        cache.countLimit = 256
++        return cache
++    }()
++
++    static func load(path: String?, key: String, pixels: Int) -> UIImage? {
++        guard let path else { return nil }
++        if let image = images.object(forKey: key as NSString) { return image }
++        let url = URL(fileURLWithPath: path)
++        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]),
++              values.isRegularFile == true, let bytes = values.fileSize,
++              bytes > 0, bytes <= 8 * 1024 * 1024,
++              let source = CGImageSourceCreateWithURL(url as CFURL, nil),
++              let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [
++                  kCGImageSourceCreateThumbnailFromImageAlways: true,
++                  kCGImageSourceThumbnailMaxPixelSize: pixels,
++                  kCGImageSourceCreateThumbnailWithTransform: true,
++                  kCGImageSourceShouldCacheImmediately: true
++              ] as CFDictionary) else { return nil }
++        let image = UIImage(cgImage: cg)
++        images.setObject(image, forKey: key as NSString, cost: cg.bytesPerRow * cg.height)
++        return image
+     }
+ }
+ /// Live log tail with a share button. The share sheet is the practical way to get
+--- a/src/app/Husk/DiscoverTab.swift
++++ b/src/app/Husk/DiscoverTab.swift
+@@ -27,6 +27,10 @@
+                             .font(.headline).foregroundStyle(Theme.text)
+                         Text("أضف مصدرًا لبدء اكتشاف التطبيقات.")
+                             .foregroundStyle(Theme.textDim).multilineTextAlignment(.center)
++                        if let error = manager.fetchErrors.values.sorted().first {
++                            Text(error).font(.callout).foregroundStyle(.red)
++                                .multilineTextAlignment(.center)
++                        }
+                         Button {
+                             showingAddSource = true
+                         } label: {
+@@ -39,6 +43,12 @@
+                     ScrollView {
+                         LazyVStack(spacing: 24) {
+                             sourcesHeader
++                            if !debouncedSearchText.isEmpty,
++                               manager.sources.allSatisfy({ filteredApps(for: $0).isEmpty }) {
++                                EmptyState(title: "لا نتائج",
++                                    message: "جرّب اسم التطبيق أو اسم الحزمة.",
++                                    systemImage: "magnifyingglass")
++                            }
+                             ForEach(manager.sources) { source in
+                                 let filtered = filteredApps(for: source)
+                                 if !filtered.isEmpty {
+@@ -53,9 +63,9 @@
+             .navigationTitle("اكتشف")
+             .searchable(text: $searchText, prompt: "ابحث في \(totalAppCount) تطبيق…")
+             .toolbar {
+-                ToolbarItem(placement: .topBarTrailing) {
++                ToolbarItem(placement: .navigationBarTrailing) {
+                     HStack(spacing: 14) {
+-                        Button { Task { await manager.fetchSources() } } label: {
++                        Button { Task { await manager.fetchSources(force: true) } } label: {
+                             Image(systemName: "arrow.clockwise")
+                         }
+                         Button { showingAddSource = true } label: {
+@@ -66,6 +76,13 @@
+             }
+             .sheet(isPresented: $showingSources) { sourcesSheet }
+             .sheet(isPresented: $showingAddSource) { addSourceSheet }
++            .alert("تعذّر تنزيل التطبيق", isPresented: Binding(
++                get: { !manager.downloadErrors.isEmpty },
++                set: { if !$0 { manager.downloadErrors.removeAll() } })) {
++                Button("حسنًا") { manager.downloadErrors.removeAll() }
++            } message: {
++                Text(manager.downloadErrors.values.sorted().first ?? "")
++            }
+             .onAppear {
+                 if manager.sources.isEmpty && !manager.isLoading {
+                     Task { await manager.fetchSources() }
+@@ -114,9 +131,9 @@
+                 Button { showingAddSource = true } label: {
+                     Label("إضافة مصدر", systemImage: "plus")
+                         .font(.subheadline.bold())
+-                        .foregroundStyle(.blue)
++                        .foregroundStyle(Theme.accent)
+                         .padding(.horizontal, 14).padding(.vertical, 10)
+-                        .background(Color.blue.opacity(0.12))
++                        .background(Theme.accentSoft)
+                         .cornerRadius(12)
+                 }
+                 .buttonStyle(.plain)
+@@ -136,7 +153,7 @@
+     }
+ 
+     private func sourceSection(_ source: AppSource, apps: [SourceApp]) -> some View {
+-        VStack(alignment: .leading, spacing: 16) {
++        LazyVStack(alignment: .leading, spacing: 16) {
+             Text(source.name)
+                 .font(.title2.bold()).foregroundStyle(Theme.text).padding(.horizontal, 4)
+ 
+@@ -152,9 +169,7 @@
+                     .frame(maxWidth: .infinity, alignment: .center).padding(.bottom, 4)
+             }
+         }
+-        .padding()
+-        .background(Theme.surface)
+-        .cornerRadius(16)
++        .padding(.vertical, 8)
+     }
+ 
+     private func appRow(_ app: SourceApp) -> some View {
+@@ -184,26 +199,36 @@
+ 
+             if isInstalled {
+                 Button("فتح") {
+-                    let intent = "am start -n \(app.bundleIdentifier)/\(app.bundleIdentifier).MainActivity"
+-                    _ = try? GuestBridge.shared.shell(intent, timeout: 5)
+-                }
++                    guard SourceValidation.package(app.bundleIdentifier) else { return }
++                    host.launch(app.bundleIdentifier) {
++                        Router.shared.tab = .library
++                        Router.shared.wantsGuestScreen = true
++                    }
++                }
++                .disabled(!host.isReady || host.busy != nil)
++                .frame(minHeight: 44)
+                 .font(.subheadline.bold())
+                 .padding(.horizontal, 16).padding(.vertical, 8)
+                 .background(Theme.surfaceHigh).foregroundStyle(Theme.text)
+                 .cornerRadius(16)
+             } else if let progress = progress {
+-                ZStack {
++                Button { manager.cancelDownload(app.id) } label: {
++                  ZStack {
+                     Circle().stroke(Theme.surfaceHigh, lineWidth: 3).frame(width: 28, height: 28)
+                     Circle().trim(from: 0, to: progress)
+-                        .stroke(Color.blue, style: StrokeStyle(lineWidth: 3, lineCap: .round))
++                        .stroke(Theme.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                         .frame(width: 28, height: 28).rotationEffect(.degrees(-90))
+                     Image(systemName: "stop.fill").font(.system(size: 10)).foregroundStyle(Theme.textDim)
+-                }
++                  }
++                }
++                .frame(minWidth: 44, minHeight: 44)
++                .accessibilityLabel("إلغاء تنزيل \(app.name)")
+             } else {
+                 Button("تنزيل") { manager.downloadAndInstall(app: app) }
+                     .font(.subheadline.bold())
+                     .padding(.horizontal, 16).padding(.vertical, 8)
+-                    .background(Color.blue.opacity(0.2)).foregroundStyle(.blue)
++                    .frame(minHeight: 44)
++                    .background(Theme.accentSoft).foregroundStyle(Theme.accent)
+                     .cornerRadius(16)
+             }
+         }
+@@ -255,18 +280,18 @@
+             .background(Theme.backdrop.ignoresSafeArea())
+             .navigationTitle("إضافة مصدر")
+             .toolbar {
+-                ToolbarItem(placement: .topBarLeading) {
++                ToolbarItem(placement: .navigationBarLeading) {
+                     Button("إلغاء") { newSourceURL = ""; showingAddSource = false }
+                 }
+-                ToolbarItem(placement: .topBarTrailing) {
++                ToolbarItem(placement: .navigationBarTrailing) {
+                     Button("إضافة") {
+-                        let url = newSourceURL
++                        let url = newSourceURL.trimmingCharacters(in: .whitespacesAndNewlines)
+                         newSourceURL = ""
+                         showingAddSource = false
+-                        guard !url.isEmpty, URL(string: url) != nil else { return }
++                        guard SourceValidation.httpsURL(url) != nil else { return }
+                         Task { await manager.addSource(urlString: url) }
+                     }
+-                    .disabled(newSourceURL.isEmpty)
++                    .disabled(SourceValidation.httpsURL(newSourceURL.trimmingCharacters(in: .whitespacesAndNewlines)) == nil)
+                     .bold()
+                 }
+             }
+@@ -289,15 +314,18 @@
+                         }
+                         .padding(.vertical, 4)
+                     }
+-                    .onDelete { manager.sourceURLs.remove(atOffsets: $0) }
++                    .onDelete { offsets in
++                        let urls = offsets.map { manager.sourceURLs[$0] }
++                        for url in urls { manager.removeSource(urlString: url) }
++                    }
+                 }
+             }
+             .navigationTitle("المستودعات")
+             .toolbar {
+-                ToolbarItem(placement: .topBarLeading) {
++                ToolbarItem(placement: .navigationBarLeading) {
+                     Button("تم") { showingSources = false }
+                 }
+-                ToolbarItem(placement: .topBarTrailing) {
++                ToolbarItem(placement: .navigationBarTrailing) {
+                     Button { showingSources = false; showingAddSource = true } label: {
+                         Image(systemName: "plus")
+                     }
+--- a/src/app/Husk/FilesTab.swift
++++ b/src/app/Husk/FilesTab.swift
+@@ -21,7 +21,7 @@
+                 .navigationDestination(for: String.self) { path in
+                     DirectoryView(path: path,
+                                   title: (path as NSString).lastPathComponent)
+-                        .toolbar(.hidden, for: .tabBar)
++                        .toolbar(.visible, for: .tabBar)
+                 }
+         }
+     }
+--- a/src/app/Husk/GuestImage.swift
++++ b/src/app/Husk/GuestImage.swift
+@@ -189,11 +189,15 @@
+         guard let data = FileManager.default.contents(atPath: snapshotPinsPath),
+               let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let mib = j["guestMiB"] as? Int,
+-              let x = j["xres"] as? Int, let y = j["yres"] as? Int
++              let x = j["xres"] as? Int, let y = j["yres"] as? Int,
++              (256...4096).contains(mib), (128...4096).contains(x), (128...4096).contains(y),
++              (1...8).contains(j["smp"] as? Int ?? Self.defaultSmp)
+         else { return fallback }
++        let cpu = j["cpu"] as? String ?? Self.defaultCpu
++        guard [Self.defaultCpu, "max", "cortex-a72"].contains(cpu) else { return fallback }
+         return (mib, x, y,
+                 j["smp"] as? Int ?? Self.defaultSmp,
+-                j["cpu"] as? String ?? Self.defaultCpu)
++                cpu)
+     }
+ 
+     /// What this build uses when a snapshot does not say otherwise.
+@@ -211,8 +215,16 @@
+     /// strings, which cannot detect either of the two ways it has actually gone
+     /// wrong: a stamp that outlived the files it described, and an asset
+     /// published under a new name carrying the old bytes.
++    private var checkingUpdates = false
++    private var lastUpdateCheck: Date?
++
+     func checkForUpdates() async {
++        guard !checkingUpdates else { return }
++        if let lastUpdateCheck, Date().timeIntervalSince(lastUpdateCheck) < 600 { return }
++        checkingUpdates = true
++        defer { checkingUpdates = false }
+         guard let m = await GuestManifest.fetch() else { return }
++        lastUpdateCheck = Date()
+         manifest = m
+         snapshotPinsToRecord = m.snapshot
+ 
+--- a/src/app/Husk/GuestManifest.swift
++++ b/src/app/Husk/GuestManifest.swift
+@@ -76,12 +76,18 @@
+         do {
+             let (data, response) = try await URLSession.shared.data(for: request)
+             guard let http = response as? HTTPURLResponse,
+-                  (200...299).contains(http.statusCode) else {
++                  (200...299).contains(http.statusCode),
++                  data.count <= 1024 * 1024,
++                  response.url?.scheme?.lowercased() == "https" else {
+                 HuskLog.log("guest", "manifest unavailable (HTTP "
+                           + "\((response as? HTTPURLResponse)?.statusCode ?? 0))")
+                 return nil
+             }
+             let manifest = try JSONDecoder().decode(GuestManifest.self, from: data)
++            guard manifest.isValid else {
++                HuskLog.log("guest", "manifest rejected: invalid filenames, hashes or machine limits")
++                return nil
++            }
+             HuskLog.log("guest", "manifest \(manifest.generation): image "
+                       + "\(manifest.image.sha256.prefix(12))…, snapshot "
+                       + "\(manifest.snapshot.sha256.prefix(12))…")
+@@ -93,8 +99,26 @@
+     }
+ 
+     func url(for file: String) -> URL {
+-        URL(string: "https://github.com/Leviidev/Husk/releases/download/"
+-                  + "\(GuestImage.dependenciesTag)/\(file)")!
++        URL(string: "https://github.com/Leviidev/Husk/releases/download/")!
++            .appendingPathComponent(GuestImage.dependenciesTag)
++            .appendingPathComponent(file)
++    }
++
++    var isValid: Bool {
++        SourceValidation.fileName(image.file)
++            && SourceValidation.digest(image.sha256) == image.sha256
++            && SourceValidation.digest(snapshot.sha256) == snapshot.sha256
++            && image.size > 0 && image.size <= 16 * 1024 * 1024 * 1024
++            && snapshot.size > 0 && snapshot.size <= 16 * 1024 * 1024 * 1024
++            && !snapshot.parts.isEmpty && snapshot.parts.count <= 32
++            && Set(snapshot.parts).count == snapshot.parts.count
++            && snapshot.parts.allSatisfy(SourceValidation.fileName)
++            && (256...4096).contains(snapshot.guestMiB)
++            && (128...4096).contains(snapshot.xres)
++            && (128...4096).contains(snapshot.yres)
++            && (1...8).contains(snapshot.smp ?? 4)
++            && (snapshot.cpu == nil || snapshot.cpu == GuestImage.defaultCpu
++                || snapshot.cpu == "max" || snapshot.cpu == "cortex-a72")
+     }
+ 
+     var partURLs: [URL] { snapshot.parts.map { url(for: $0) } }
+@@ -165,8 +189,12 @@
+         guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
+         defer { try? handle.close() }
+         let writer = DigestWriter()
+-        while let chunk = try? handle.read(upToCount: 4 << 20), !chunk.isEmpty {
+-            writer.update(chunk)
++        do {
++            while let chunk = try handle.read(upToCount: 4 << 20), !chunk.isEmpty {
++                writer.update(chunk)
++            }
++        } catch {
++            return nil
+         }
+         return writer.finish()
+     }
+--- a/src/app/Husk/HuskBridgeFS.swift
++++ b/src/app/Husk/HuskBridgeFS.swift
+@@ -867,8 +867,10 @@
+         guard let data = try? Data(contentsOf: catalogueURL),
+               let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+         else { return [] }
++        var seen: Set<String> = []
+         return rows.compactMap { row in
+-            guard let name = row["name"] as? String, !name.isEmpty else { return nil }
++            guard let name = row["name"] as? String, SourceValidation.package(name),
++                  seen.insert(name).inserted else { return nil }
+             let icon = (row["icon"] as? String) ?? ""
+             let used = row["lastUsed"] as? Double
+             return Package(name: name,
+@@ -960,16 +962,17 @@
+     nonisolated func refreshPackages() async {
+         do {
+             let raw = try GuestBridge.shared.shell("pm list packages -3", timeout: 60)
+-            let names = raw.split(separator: "\n")
++            let names = Array(Set(raw.split(separator: "\n")
+                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                 .filter { $0.hasPrefix("package:") }
+                 .map { String($0.dropFirst("package:".count)) }
+-                .filter { !$0.isEmpty }
++                .filter { SourceValidation.package($0) })).sorted()
+             // Android's own labels and icons, in one round trip for every app
+             // at once, before anything is put on screen.
+             let known = names.isEmpty ? [:] : await self.launcherCatalogue()
+             var labels: [String: String] = [:]
+             for (package, entry) in known {
++                guard SourceValidation.package(package) else { continue }
+                 if let label = entry.label { labels[package] = label }
+                 guard let icon = entry.icon else { continue }
+                 let dest = Self.iconDirectory.appendingPathComponent("\(package).png")
+@@ -1051,7 +1054,7 @@
+                 return [:]
+             }
+ 
+-            let db = try GuestBridge.shared.pull("cat \(path)", timeout: 120)
++            let db = try GuestBridge.shared.pull("cat \(Self.quote(path))", timeout: 120)
+             guard db.prefix(6) == Data("SQLite".utf8) else {
+                 HuskLog.log("bridge", "\(path) is not a SQLite file (\(db.count) bytes)")
+                 return [:]
+@@ -1064,7 +1067,7 @@
+             // an app installed this session, most of all -- are in the sidecar
+             // rather than the file itself. Brought along so SQLite can replay
+             // it; harmless when there is nothing to replay.
+-            if let wal = try? GuestBridge.shared.pull("cat \(path)-wal", timeout: 120),
++            if let wal = try? GuestBridge.shared.pull("cat \(Self.quote(path + "-wal"))", timeout: 120),
+                wal.count > 32 {
+                 try? wal.write(to: Self.support.appendingPathComponent(
+                     "launcher-icons.db-wal"))
+@@ -1290,7 +1293,7 @@
+     /// Single-quoted for a shell, with any quote of its own removed. A guest
+     /// filename is chosen by whoever made the file and reaches a shell verbatim.
+     nonisolated static func quote(_ path: String) -> String {
+-        "'" + path.replacingOccurrences(of: "'", with: "") + "'"
++        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+     }
+ 
+     /// Ask an app what it is called and what it looks like.
+@@ -1303,6 +1306,7 @@
+     /// table, read the way `aapt` reads them, which needs nothing but the file
+     /// itself. Only if that fails does it fall back to guessing at filenames.
+     nonisolated private func fetchAppInfo(for package: String) async {
++        guard SourceValidation.package(package) else { return }
+         let dest = Self.iconDirectory.appendingPathComponent("\(package).png")
+         let haveIcon = FileManager.default.fileExists(atPath: dest.path)
+         let haveLabel = await MainActor.run {
+@@ -1550,6 +1554,7 @@
+     }
+ 
+     func uninstall(_ package: String) {
++        guard SourceValidation.package(package), busy == nil else { return }
+         busy = "جارٍ إزالة \(package)…"
+         Task.detached { [weak self] in
+             var out = (try? GuestBridge.shared.shell("pm uninstall \(package)",
+@@ -1901,6 +1906,7 @@
+     }
+ 
+     func launch(_ pkg: String, then: @escaping () -> Void) {
++        guard SourceValidation.package(pkg), isReady, busy == nil else { return }
+         markLaunched(pkg)
+         busy = "جارٍ الفتح…"
+         Task.detached { [weak self] in
+--- a/src/app/Husk/Info.plist
++++ b/src/app/Husk/Info.plist
+@@ -5,7 +5,7 @@
+ 	<!-- These four are NOT optional: without CFBundleIdentifier and
+ 	     CFBundleExecutable the bundle will not install at all. Xcode only injects
+ 	     them when GENERATE_INFOPLIST_FILE is on, which it is not when a custom
+-	     INFOPLIST_FILE is supplied -- so they are declared here and filled in by
++	     INFOPLIST_FILE is supplied, so they are declared here and filled in by
+ 	     INFOPLIST_EXPAND_BUILD_SETTINGS (on by default). -->
+ 	<key>CFBundleIdentifier</key>
+ 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+@@ -21,11 +21,11 @@
+ 	<string>$(DEVELOPMENT_LANGUAGE)</string>
+ 
+ 	<key>CFBundleDisplayName</key>
+-	<string>هاسك</string>
++	<string>ios app</string>
+ 	<key>CFBundleShortVersionString</key>
+-	<string>0.6.1</string>
++	<string>0.6.2</string>
+ 	<key>CFBundleVersion</key>
+-	<string>9</string>
++	<string>10</string>
+ 	<key>UILaunchScreen</key>
+ 	<dict/>
+ 	<key>UIRequiredDeviceCapabilities</key>
+@@ -45,16 +45,16 @@
+ 		<string>stosdebug</string>
+ 		<string>apple-magnifier</string>
+ 	</array>
+-	<!-- Android games may talk plain http as well as https; iOS refuses plain http unless told otherwise. -->
++	<!-- Native host networking requires TLS. QEMU's guest networking is separate. -->
+ 	<key>NSAppTransportSecurity</key>
+ 	<dict>
+ 		<key>NSAllowsArbitraryLoads</key>
+-		<true/>
++		<false/>
+ 	</dict>
+ 	<key>UIStatusBarHidden</key>
++	<false/>
++	<key>UIViewControllerBasedStatusBarAppearance</key>
+ 	<true/>
+-	<key>UIViewControllerBasedStatusBarAppearance</key>
+-	<false/>
+ 	<!-- Phase 3 drops APKs in here. -->
+ 	<key>UIFileSharingEnabled</key>
+ 	<true/>
+--- a/src/app/Husk/LibraryTab.swift
++++ b/src/app/Husk/LibraryTab.swift
+@@ -22,7 +22,7 @@
+     @State private var filter = "All"
+     @FocusState private var searchFocused: Bool
+ 
+-    private let columns = [GridItem(.adaptive(minimum: 100), spacing: 12)]
++    private let columns = [GridItem(.adaptive(minimum: 92, maximum: 140), spacing: 20)]
+ 
+     var body: some View {
+         NavigationStack(path: $router.library) {
+@@ -31,7 +31,7 @@
+                 content
+             }
+             .navigationBarHidden(true)
+-            .toolbar(.hidden, for: .tabBar)
++            .toolbar(.visible, for: .tabBar)
+             .navigationDestination(for: AndroidHost.Package.self) { app in
+                 AppDetailView(app: app, onOpenGuest: onOpenGuest)
+             }
+@@ -47,7 +47,7 @@
+ 
+     @ViewBuilder private var content: some View {
+         ScrollView {
+-            VStack(spacing: 16) {
++            VStack(spacing: 24) {
+                 HuskHeader(mark: true, title: "المكتبة") {
+                     HStack(spacing: 10) {
+                         // Android itself, from the library, whenever it is up.
+@@ -71,7 +71,7 @@
+                 if !categories.isEmpty { chips }
+ 
+                 if !shown.isEmpty {
+-                    LazyVGrid(columns: columns, spacing: 12) {
++                    LazyVGrid(columns: columns, spacing: 28) {
+                         ForEach(shown) { app in
+                             NavigationLink(value: app) {
+                                 AppCard(app: app, dimmed: !host.isReady)
+@@ -101,7 +101,7 @@
+                                action: { importing = true })
+                 }
+             }
+-            .padding(.horizontal, 18)
++            .padding(.horizontal, 24)
+             .padding(.top, 6)
+             .padding(.bottom, 28)
+         }
+@@ -155,7 +155,7 @@
+                     Text(started ? host.status
+                                  : JITBootstrap.isDebuggerAttached
+                                    ? "تطبيقاتك هنا؛ شغّله لفتحها."
+-                                   : "يحتاج Husk إلى JIT، ولا يمنحه إلا مصحح.")
++                                   : "يحتاج ios app إلى JIT لتشغيل أندرويد.")
+                         .font(.system(size: 12))
+                         .foregroundStyle(Theme.textDim)
+                         .lineLimit(1)
+@@ -189,7 +189,7 @@
+     private var chips: some View {
+         ScrollView(.horizontal, showsIndicators: false) {
+             HStack(spacing: 8) {
+-                Chip(title: "All", selected: filter == "All") { filter = "All" }
++                Chip(title: "الكل", selected: filter == "All") { filter = "All" }
+                 ForEach(categories, id: \.self) { c in
+                     Chip(title: plural(c), selected: filter == c) { filter = c }
+                 }
+@@ -230,22 +230,23 @@
+     var dimmed = false
+ 
+     var body: some View {
+-        VStack(alignment: .leading, spacing: 10) {
+-            AppIcon(path: app.iconPath, size: 46)
+-                .opacity(dimmed ? 0.5 : 1)
+-            VStack(alignment: .leading, spacing: 2) {
++        VStack(spacing: 10) {
++            AppIcon(path: app.iconPath, size: 68)
++                .opacity(dimmed ? 0.65 : 1)
++            VStack(spacing: 3) {
+                 Text(app.label)
+-                    .font(.system(size: 13, weight: .semibold))
++                    .font(.system(size: 15, weight: .medium))
+                     .foregroundStyle(Theme.text)
+-                    .lineLimit(1)
++                    .lineLimit(2)
++                    .multilineTextAlignment(.center)
+                 Text(app.category ?? app.bitness ?? " ")
+-                    .font(.system(size: 11))
++                    .font(.system(size: 12))
+                     .foregroundStyle(Theme.textDim)
+                     .lineLimit(1)
+             }
+         }
+-        .frame(maxWidth: .infinity, alignment: .leading)
+-        .padding(12)
+-        .huskCard()
++        .frame(maxWidth: .infinity, alignment: .top)
++        .frame(minHeight: 112, alignment: .top)
++        .contentShape(Rectangle())
+     }
+ }
+--- a/src/app/Husk/LibraryView.swift
++++ b/src/app/Husk/LibraryView.swift
+@@ -25,13 +25,13 @@
+                     grid
+                 }
+             }
+-            .navigationTitle("Husk")
++            .navigationTitle("ios app")
+             .toolbar {
+                 ToolbarItem(placement: .primaryAction) {
+                     Button { importing = true } label: { Image(systemName: "plus") }
+                         .accessibilityLabel("إضافة APK")
+                 }
+-                ToolbarItem(placement: .topBarLeading) {
++                ToolbarItem(placement: .navigationBarLeading) {
+                     Button { showLogs = true } label: {
+                         Image(systemName: "doc.text.magnifyingglass")
+                     }
+--- a/src/app/Husk/OnboardingView.swift
++++ b/src/app/Husk/OnboardingView.swift
+@@ -61,18 +61,18 @@
+                             Capsule()
+                                 .fill(i == page ? Theme.accent : Color.secondary.opacity(0.3))
+                                 .frame(width: i == page ? 18 : 6, height: 6)
+-                                .animation(.snappy, value: page)
++                                .animation(.easeOut(duration: 0.22), value: page)
+                         }
+                     }
+                     Button {
+                         if page < pages - 1 {
+-                            withAnimation(.snappy) { page += 1 }
++                            withAnimation(.easeOut(duration: 0.22)) { page += 1 }
+                         } else {
+                             save()
+                             onDone()
+                         }
+                     } label: {
+-                        Text(page < pages - 1 ? "متابعة" : "ابدأ استخدام Husk")
++                        Text(page < pages - 1 ? "متابعة" : "ابدأ استخدام ios app")
+                     }
+                     .buttonStyle(PrimaryButtonStyle())
+                     .padding(.horizontal, 28)
+@@ -96,36 +96,42 @@
+     // MARK: pages
+ 
+     private var welcome: some View {
+-        VStack(spacing: 20) {
++        VStack(alignment: .leading, spacing: 24) {
+             Spacer()
+             if let art = HuskAppIcon.current.preview(dark: scheme == .dark) {
+                 Image(uiImage: art)
+                     .resizable().scaledToFit()
+-                    .frame(width: 112, height: 112)
++                    .frame(width: 96, height: 96)
+                     .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
+-                    .shadow(color: Theme.accent.opacity(0.35), radius: 22, y: 10)
+             }
+-            Text("Husk").font(.system(size: 40, weight: .semibold, design: .rounded))
+-            Text("تطبيقات أندرويد، على آيفونك.")
+-                .font(.title3).foregroundStyle(.secondary)
+-            Text("يشغّل Husk نظام أندرويد حقيقيًا ويفتح ملفات APK داخله. "
+-               + "بضع أسئلة أولًا — ويمكنك تغيير إجاباتها لاحقًا من الإعدادات.")
+-                .font(.callout).foregroundStyle(.secondary)
+-                .multilineTextAlignment(.center)
+-                .padding(.horizontal, 34).padding(.top, 4)
++            Text("ios app")
++                .font(.system(size: 20, weight: .semibold))
++                .foregroundStyle(Theme.accent)
++            Text("تطبيقاتك.\nمساحة جديدة.")
++                .font(.system(size: 44, weight: .bold))
++                .fixedSize(horizontal: false, vertical: true)
++            Text("مكتبة بسيطة على آيفونك لتشغيل تطبيقات أندرويد. "
++               + "استورد APK، نظّم ملفاتك، وافتح تطبيقاتك من مكان واحد.")
++                .font(.system(size: 17))
++                .foregroundStyle(Theme.textDim)
++                .fixedSize(horizontal: false, vertical: true)
++            Label("يتطلب JIT وبيئة أندرويد منفصلة", systemImage: "info.circle")
++                .font(.footnote)
++                .foregroundStyle(Theme.textDim)
+             Spacer()
+         }
++        .padding(.horizontal, 32)
+     }
+ 
+     private var choices: some View {
+         ScrollView {
+             VStack(spacing: 14) {
+-                Text("كيف تريد أن يعمل Husk؟")
++                Text("خلّه على طريقتك")
+                     .font(.title2.weight(.semibold))
+                     .padding(.top, 34).padding(.bottom, 6)
+ 
+                 choice(icon: "bolt.fill", title: "تشغيل أندرويد عند الفتح",
+-                       detail: "يُقلع نظام الضيف فور فتح Husk، عندما يكون JIT "
++                       detail: "يُقلع نظام الضيف فور فتح ios app، عندما يكون JIT "
+                              + "متاحًا. إيقافه يعني أنك تشغّله بنفسك.",
+                        isOn: $autoStart)
+ 
+@@ -176,7 +182,7 @@
+                 .font(.system(size: 62))
+                 .foregroundStyle(Theme.accent)
+             Text("جاهز").font(.largeTitle.weight(.semibold))
+-            Text("يحتاج Husk إلى JIT لتشغيل أندرويد، ولا يمنحه في iOS إلا أداة "
++            Text("يحتاج ios app إلى JIT لتشغيل أندرويد، ولا يمنحه في iOS إلا أداة "
+                + "تصحيح الأخطاء. إن لم يكن مفعّلًا، ستخبرك المكتبة بذلك وتعرض "
+                + "عليك فتح StikDebug.")
+                 .font(.callout).foregroundStyle(.secondary)
+--- a/src/app/Husk/QemuRunner.swift
++++ b/src/app/Husk/QemuRunner.swift
+@@ -29,7 +29,7 @@
+         case firehose  = "guest_errors,unimp,cpu_reset,page,mmu,int,exec,in_asm"
+     }
+ 
+-    var verbosity: Verbosity = .detailed
++    var verbosity: Verbosity = .normal
+ 
+     /// Which guest to boot.
+     ///
+--- a/src/app/Husk/SettingsTab.swift
++++ b/src/app/Husk/SettingsTab.swift
+@@ -15,74 +15,46 @@
+ 
+     var body: some View {
+         NavigationStack {
+-            ZStack {
+-                Theme.backdrop
+-                ScrollView {
+-                    VStack(alignment: .leading, spacing: 22) {
+-                        HuskHeader(mark: true, title: "الإعدادات")
+-
+-                        group("عام") {
+-                            link(LibrarySettings(), "square.grid.2x2", "المكتبة",
+-                                 "تطبيقاتك وأيقوناتها")
+-                            RowDivider()
+-                            link(PerformanceSettings(), "speedometer", "الأداء",
+-                                 "المعالج الرسومي، الصوت")
+-                            RowDivider()
+-                            link(AppearanceSettings(), "paintbrush", "المظهر",
+-                                 "فاتح أو داكن، أيقونة التطبيق")
++            List {
++                Section {
++                    NavigationLink { AboutSettings() } label: {
++                        HStack(spacing: 16) {
++                            HuskMark(size: 56)
++                            VStack(alignment: .leading, spacing: 4) {
++                                Text("ios app").font(.title2.weight(.bold))
++                                Text("مساحتك لتطبيقات أندرويد")
++                                    .font(.subheadline).foregroundStyle(Theme.textDim)
++                            }
++                            .padding(.vertical, 8)
+                         }
+-
+-                        group("المحاكي") {
+-                            link(JITSettings(), "bolt.circle", "JIT والتثبيت اليدوي",
+-                                 "ذاكرة التنفيذ، بدء التشغيل")
+-                            RowDivider()
+-                            link(InputSettings(), "hand.tap", "الإدخال",
+-                                 "الشاشة، اللمس، لوحة المفاتيح")
+-                            RowDivider()
+-                            link(NetworkSettings(), "globe", "الشبكة",
+-                                 "الإنترنت والجلسات المحفوظة")
+-                            RowDivider()
+-                            link(SavedMachineSettings(), "externaldrive",
+-                                 "الجهاز المحفوظ", "اللقطات والحفظ التلقائي")
+-                        }
+-
+-                        group("تجريبي") {
+-                            link(TranslationLayerSettings(), "testtube.2",
+-                                 "Android Translation Layer",
+-                                 "تطبيقات بدون تشغيل أندرويد")
+-                        }
+-
+-                        group("حول") {
+-                            NavigationLink { AboutSettings() } label: {
+-                                HStack(spacing: 14) {
+-                                    HuskMark(size: 34)
+-                                    VStack(alignment: .leading, spacing: 2) {
+-                                        Text("Husk")
+-                                            .font(.system(size: 15, weight: .medium))
+-                                            .foregroundStyle(Theme.text)
+-                                        Text("الإصدار \(Bundle.main.version) "
+-                                           + "· \(Bundle.main.commit)")
+-                                            .font(.system(size: 12))
+-                                            .foregroundStyle(Theme.textDim)
+-                                    }
+-                                    Spacer(minLength: 8)
+-                                    Image(systemName: "chevron.right")
+-                                        .font(.system(size: 13, weight: .semibold))
+-                                        .foregroundStyle(Theme.textDim.opacity(0.7))
+-                                }
+-                                .padding(.horizontal, 14).padding(.vertical, 12)
+-                                .contentShape(Rectangle())
+-                            }
+-                            .buttonStyle(.plain)
+-                        }
+-                    }
+-                    .padding(.horizontal, 18)
+-                    .padding(.top, 6)
+-                    .padding(.bottom, 28)
+-                }
+-            }
+-            .navigationBarHidden(true)
+-            .toolbar(.hidden, for: .tabBar)
++                    }
++                }
++                Section("تطبيقك") {
++                    link(LibrarySettings(), "square.grid.2x2", "المكتبة", "تطبيقاتك وأيقوناتها")
++                    link(AppearanceSettings(), "paintbrush", "المظهر", "الأيقونة وألوان الواجهة")
++                }
++                Section("التشغيل") {
++                    link(PerformanceSettings(), "speedometer", "الأداء", "المعالج الرسومي والصوت")
++                    link(JITSettings(), "bolt.circle", "JIT", "تهيئة التشغيل والبدء التلقائي")
++                    link(SavedMachineSettings(), "externaldrive", "الجهاز المحفوظ", "الاستعادة والحفظ التلقائي")
++                }
++                Section("أندرويد") {
++                    link(InputSettings(), "hand.tap", "الشاشة والإدخال", "اللمس ولوحة المفاتيح")
++                    link(NetworkSettings(), "globe", "الشبكة", "اتصال الضيف بالإنترنت")
++                }
++                Section {
++                    link(TranslationLayerSettings(), "testtube.2", "التشغيل الأصلي", "ميزة تجريبية للتطبيقات الموثوقة")
++                } header: {
++                    Text("للمطوّرين")
++                } footer: {
++                    Text("التشغيل الأصلي ليس بيئة معزولة. شغّل ملفات APK المجهولة داخل أندرويد، لا داخل التطبيق.")
++                }
++            }
++            .listStyle(.insetGrouped)
++            .scrollContentBackground(.hidden)
++            .background(Theme.backdrop)
++            .navigationTitle("الإعدادات")
++            .toolbar(.visible, for: .tabBar)
+         }
+     }
+ 
+@@ -101,7 +73,7 @@
+     private func link<D: View>(_ destination: D, _ icon: String,
+                                _ title: String, _ subtitle: String) -> some View {
+         NavigationLink { destination } label: {
+-            HuskRow(systemImage: icon, title: title, subtitle: subtitle)
++            HuskRow(systemImage: icon, title: title, subtitle: subtitle, showsChevron: false)
+         }
+         .buttonStyle(.plain)
+     }
+@@ -473,11 +445,11 @@
+             } header: {
+                 Text("JIT")
+             } footer: {
+-                Text("يحتاج Husk إلى ذاكرة يكتب فيها ثم ينفّذها، وهذا على iOS "
++                Text("يحتاج ios app إلى ذاكرة يكتب فيها ثم ينفّذها، وهذا على iOS "
+                    + "يتطلب مصححًا متصلًا. هناك طريقتان للحصول عليه: مصحح يلبّي "
+                    + "طلبات المصائد، أو تعيين MAP_JIT الذي تسمح به النواة لأي "
+                    + "عملية مصحَّحة. أيٌّ منهما يكفي — والمتاح منهما يعتمد على "
+-                   + "الجهاز وإصدار iOS، لذا يختبر Husk الاثنين بدل الافتراض.")
++                   + "الجهاز وإصدار iOS، لذا يختبر ios app الاثنين بدل الافتراض.")
+             }
+ 
+             Section {
+@@ -486,14 +458,14 @@
+                         UserDefaults.standard.set(v, forKey: "husk.autoStart")
+                     }
+             } footer: {
+-                Text("يقلع الضيف فور فتح Husk عندما يكون JIT متاحًا.")
++                Text("يقلع الضيف فور فتح ios app عندما يكون JIT متاحًا.")
+             }
+ 
+             Section {
+                 Toggle("إبقاء المصحح متصلًا", isOn: $keepAttached)
+                     .onChange(of: keepAttached) { v in JITBootstrap.keepDebuggerAttached = v }
+             } footer: {
+-                Text("مطفأ افتراضيًا. يفصل Husk عن StikDebug فور امتلاك منطقة "
++                Text("مطفأ افتراضيًا. يفصل ios app عن StikDebug فور امتلاك منطقة "
+                    + "JIT، لأن مصححًا علّقه iOS يوقف التطبيق كله في المرة التالية "
+                    + "التي يُحتاج فيها. فعّله فقط لجمع سجلات StikDebug الخاصة.")
+             }
+@@ -539,7 +511,7 @@
+                 }
+                 .disabled(runner.isSavingState)
+             } footer: {
+-                Text("يستعيد Husk جهازًا محفوظًا بدل إقلاعه، فيستغرق ثوانٍ بدل "
++                Text("يستعيد ios app جهازًا محفوظًا بدل إقلاعه، فيستغرق ثوانٍ بدل "
+                    + "دقائق. تتجمد الصورة أثناء الكتابة. ومع إيقافه لا يُحفظ شيء "
+                    + "تلقائيًا — حتى بعد التثبيت.")
+             }
+@@ -596,7 +568,7 @@
+ 
+ struct AppearanceSettings: View {
+     @State private var appIcon = HuskAppIcon.current
+-    @AppStorage(Theme.Appearance.key) private var appearance = Theme.Appearance.dark
++    @AppStorage(Theme.Appearance.key) private var appearance = Theme.Appearance.light
+     @Environment(\.colorScheme) private var scheme
+ 
+     private let columns = [GridItem(.adaptive(minimum: 92), spacing: 14)]
+@@ -691,7 +663,7 @@
+                 VStack(spacing: 18) {
+                     VStack(spacing: 10) {
+                         HuskMark(size: 76)
+-                        Text("Husk")
++                        Text("ios app")
+                             .font(.system(size: 22, weight: .semibold))
+                             .foregroundStyle(Theme.text)
+                         Text("الإصدار \(Bundle.main.version)")
+@@ -732,8 +704,8 @@
+                     }
+                     .buttonStyle(PrimaryButtonStyle())
+ 
+-                    Text("يشغّل Husk ملفات APK الأصلية دون تعديل في نظام أندرويد "
+-                       + "حقيقي على آيفونك. يعرض السجل سجل Husk المباشر ومخرجات "
++                    Text("ios app مبني على مشروع Husk المرخّص GPL-2.0-or-later. "
++                       + "يشغّل تطبيقات أندرويد داخل نظام منفصل على آيفونك. يعرض السجل مخرجات "
+                        + "الضيف التسلسلية ومخرجات QEMU — وهي الملفات الثلاثة التي "
+                        + "تُشخَّص منها أي مشكلة.")
+                         .font(.system(size: 12))
+--- a/src/app/Husk/TLUnityView.swift
++++ b/src/app/Husk/TLUnityView.swift
+@@ -383,7 +383,7 @@
+                 if devInfo {
+                 HStack(spacing: 10) {
+                     Button {
+-                        withAnimation(.snappy(duration: 0.25)) { showLog.toggle() }
++                        withAnimation(.easeOut(duration: 0.25)) { showLog.toggle() }
+                     } label: {
+                         HStack(spacing: 6) {
+                             Image(systemName: showLog ? "chevron.down" : "chevron.right")
+@@ -410,7 +410,7 @@
+                 .padding(.vertical, 8)
+                 .contentShape(Rectangle())
+                 .onTapGesture {
+-                    if !showLog { withAnimation(.snappy(duration: 0.25)) { showLog = true } }
++                    if !showLog { withAnimation(.easeOut(duration: 0.25)) { showLog = true } }
+                 }
+ 
+                 }
+@@ -482,7 +482,7 @@
+                     VStack(spacing: 8) {
+                         Text("لعبة ثانية محمّلة أصلًا")
+                             .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+-                        Text("\(other) بدأت في هذه الجلسة، وما يمكن إيقاف اللعبة بعد ما تشتغل. أغلق Husk تمامًا وافتحه من جديد عشان تشغّل \(app.label).")
++                        Text("\(other) بدأت في هذه الجلسة، وما يمكن إيقاف اللعبة بعد ما تشتغل. أغلق ios app تمامًا وافتحه من جديد عشان تشغّل \(app.label).")
+                             .font(.system(size: 13)).foregroundStyle(.white.opacity(0.7))
+                             .multilineTextAlignment(.center).frame(maxWidth: 460)
+                     }
+@@ -519,7 +519,7 @@
+                 Text(stats).font(.technical(11)).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+             }
+             if devInfo {
+-                Button { withAnimation(.snappy(duration: 0.25)) { showLog.toggle() } } label: {
++                Button { withAnimation(.easeOut(duration: 0.25)) { showLog.toggle() } } label: {
+                     Text(showLog ? "إخفاء السجل" : "السجل").font(.system(size: 12, weight: .semibold))
+                 }
+                 .tint(.white)
+--- a/src/app/Husk/Theme.swift
++++ b/src/app/Husk/Theme.swift
+@@ -14,10 +14,14 @@
+ /// defaults to dark, so nobody who already has the app sees it change.
+ enum Theme {
+     /// ألوان نظام iOS الأصلية — الواجهة تتبع نظام آبل مباشرة.
+-    static let bgUI = UIColor.systemBackground
++    static let bgUI = UIColor { $0.userInterfaceStyle == .dark
++        ? UIColor(red: 0.10, green: 0.09, blue: 0.12, alpha: 1)
++        : UIColor(red: 0.97, green: 0.96, blue: 0.98, alpha: 1) }
+     static let bg = Color(uiColor: bgUI)
+     /// Cards, rows, anything holding content.
+-    static let surface = Color(uiColor: .secondarySystemBackground)
++    static let surface = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark
++        ? UIColor(red: 0.16, green: 0.15, blue: 0.18, alpha: 1)
++        : UIColor(red: 0.995, green: 0.99, blue: 0.998, alpha: 1) })
+     /// One step further up: chips, icon wells, the things that sit on a card.
+     static let surfaceHigh = Color(uiColor: .tertiarySystemBackground)
+     /// The edge that separates a surface from the page.
+@@ -29,8 +33,8 @@
+     static let textDim = Color(uiColor: .secondaryLabel)
+ 
+     /// لون التمييز الأصلي للنظام.
+-    static let accent = Color.accentColor
+-    static let accentSoft = Color.accentColor.opacity(0.16)
++    static let accent = Color(red: 0.43, green: 0.27, blue: 0.70)
++    static let accentSoft = accent.opacity(0.10)
+     /// Darker on a light page: the dark-mode green all but vanishes on white.
+     static let good = Color(uiColor: .systemGreen)
+     /// What a floating thing casts. A light page wants far less of it.
+@@ -65,7 +69,7 @@
+         }
+ 
+         static var current: Appearance {
+-            Appearance(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .dark
++            Appearance(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .light
+         }
+     }
+ 
+@@ -83,8 +87,8 @@
+         }
+     }
+ 
+-    static let cardCorner: CGFloat = 18
+-    static let rowCorner: CGFloat = 14
++    static let cardCorner: CGFloat = 24
++    static let rowCorner: CGFloat = 16
+ 
+     static var backdrop: some View { bg.ignoresSafeArea() }
+ 
+@@ -170,10 +174,12 @@
+             Image(systemName: systemImage)
+                 .font(.system(size: 15, weight: .semibold))
+                 .foregroundStyle(active ? .white : Theme.text)
+-                .frame(width: 36, height: 36)
++                .frame(width: 44, height: 44)
+                 .background(active ? Theme.accent : Theme.surfaceHigh, in: Circle())
+         }
+         .buttonStyle(.plain)
++        .accessibilityLabel(systemImage == "plus" ? "إضافة" :
++                            systemImage == "arrow.clockwise" ? "تحديث" : systemImage)
+     }
+ }
+ 
+@@ -205,9 +211,9 @@
+     var body: some View {
+         Button(action: action) {
+             Text(title)
+-                .font(.system(size: 14, weight: .medium))
++                .font(.system(size: 16, weight: .medium))
+                 .foregroundStyle(selected ? .white : Theme.textDim)
+-                .padding(.horizontal, 16).padding(.vertical, 8)
++                .padding(.horizontal, 16).padding(.vertical, 12)
+                 .background(selected ? Theme.accent : Theme.surfaceHigh, in: Capsule())
+         }
+         .buttonStyle(.plain)
+@@ -267,11 +273,11 @@
+                             in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+             VStack(alignment: .leading, spacing: 2) {
+                 Text(title)
+-                    .font(.system(size: 15, weight: .medium))
++                    .font(.system(size: 17, weight: .medium))
+                     .foregroundStyle(tint)
+                 if let subtitle {
+                     Text(subtitle)
+-                        .font(.system(size: 12))
++                        .font(.system(size: 14))
+                         .foregroundStyle(Theme.textDim)
+                         .lineLimit(1)
+                 }
+@@ -351,15 +357,15 @@
+     var body: some View {
+         VStack(spacing: 14) {
+             Image(systemName: systemImage)
+-                .font(.system(size: 30, weight: .light))
++                .font(.system(size: 42, weight: .light))
+                 .foregroundStyle(Theme.accent)
+-                .frame(width: 64, height: 64)
++                .frame(width: 88, height: 88)
+                 .background(Theme.accentSoft, in: Circle())
+             Text(title)
+-                .font(.system(size: 18, weight: .semibold))
++                .font(.system(size: 24, weight: .semibold))
+                 .foregroundStyle(Theme.text)
+             Text(message)
+-                .font(.system(size: 14))
++                .font(.system(size: 17))
+                 .foregroundStyle(Theme.textDim)
+                 .multilineTextAlignment(.center)
+                 .padding(.horizontal, 28)
+@@ -478,18 +484,24 @@
+                     }
+                     .buttonStyle(.plain)
+                 } else if mark {
+-                    HuskMark(size: 32)
++                    HStack(spacing: 10) {
++                        HuskMark(size: 30)
++                        Text("ios app")
++                            .font(.system(size: 16, weight: .semibold))
++                            .foregroundStyle(Theme.textDim)
++                    }
+                 }
+                 Spacer(minLength: 8)
+                 trailing
+             }
+             if let title {
+                 Text(title)
+-                    .font(.system(size: 32, weight: .bold))
++                    .font(.system(size: 34, weight: .bold))
+                     .foregroundStyle(Theme.text)
+             }
+         }
+-        .padding(.top, 4)
++        .padding(.top, 12)
++        .padding(.bottom, 8)
+     }
+ }
+ 
+--- a/src/app/Husk/TranslationLayer.swift
++++ b/src/app/Husk/TranslationLayer.swift
+@@ -19,8 +19,12 @@
+ /// nothing here changes how the rest of Husk runs.
+ enum TranslationLayer {
+     static let enabledKey = "husk.translationLayer"
+-
+-    static var isEnabled: Bool { UserDefaults.standard.bool(forKey: enabledKey) }
++    static let trustKey = "ios-app.nativeRuntimeTrust"
++
++    static var isEnabled: Bool {
++        UserDefaults.standard.bool(forKey: enabledKey)
++            && UserDefaults.standard.bool(forKey: trustKey)
++    }
+ 
+     /// Whether the technical detail is shown: library reports, device checks, logs. Off, the screens carry
+     /// only what is needed to add an app, switch the layer on and run it. Set in Settings > About.
+@@ -351,6 +355,7 @@
+     @ObservedObject private var store = TranslationLayerStore.shared
+     @State private var enabled = TranslationLayer.isEnabled
+     @State private var importing = false
++    @State private var confirmingTrust = false
+     @AppStorage(TranslationLayer.devInfoKey) private var devInfo = false
+ 
+     var body: some View {
+@@ -358,15 +363,21 @@
+             Section {
+                 Toggle("Android Translation Layer", isOn: $enabled)
+                     .onChange(of: enabled) { v in
+-                        UserDefaults.standard.set(v, forKey: TranslationLayer.enabledKey)
+-                        HuskLog.log("ui", v ? "translation layer on" : "translation layer off")
++                        if v && !UserDefaults.standard.bool(forKey: TranslationLayer.trustKey) {
++                            enabled = false
++                            confirmingTrust = true
++                        } else {
++                            UserDefaults.standard.set(v, forKey: TranslationLayer.enabledKey)
++                            HuskLog.log("ui", v ? "translation layer on" : "translation layer off")
++                        }
+                     }
+             } header: {
+                 Text("تجريبي")
+             } footer: {
+                 if !devInfo {
+                     Text("يشغّل بعض تطبيقات أندرويد، مثل ألعاب Unity و cocos2d-x، مباشرة على آيفونك دون تشغيل "
+-                       + "أندرويد. تجريبي، ويحتاج تفعيل JIT.")
++                       + "أندرويد. الكود يعمل داخل عملية ios app، وليس داخل آلة أندرويد المعزولة. "
++                       + "لا تشغّل فيه ملفات APK مجهولة المصدر.")
+                 } else {
+                 Text("يشغّل كود التطبيق نفسه مباشرة، مقابل إعادة كتابة لإطار "
+                    + "عمل أندرويد، بدلًا من إقلاع نظام أندرويد كامل — نفس "
+@@ -386,6 +397,17 @@
+             }
+         }
+         .huskForm()
++        .alert("تشغيل كود داخل التطبيق", isPresented: $confirmingTrust) {
++            Button("إلغاء", role: .cancel) {}
++            Button("أفهم المخاطر، فعّل") {
++                UserDefaults.standard.set(true, forKey: TranslationLayer.trustKey)
++                UserDefaults.standard.set(true, forKey: TranslationLayer.enabledKey)
++                enabled = true
++            }
++        } message: {
++            Text("التشغيل الأصلي تجريبي وليس حاجزًا أمنيًا. قد يصل كود APK إلى ملفات التطبيق "
++               + "أو يتسبب في تعطله. استخدم تطبيقات موثوقة فقط؛ تشغيلها داخل أندرويد هو الخيار الأقل مخاطرة.")
++        }
+         .navigationTitle("Translation Layer")
+         .huskFilePicker(isPresented: $importing) { urls in
+             HuskLog.log("ui", "translation layer: adding \(urls.count) file(s): "
+@@ -426,7 +448,7 @@
+         } header: {
+             Text("التطبيقات")
+         } footer: {
+-            Text("يحتفظ Husk بنسخته الخاصة، منفصلة عن نسخة أندرويد. اختر ملف APK الأساسي "
++            Text("يحتفظ ios app بنسخته الخاصة، منفصلة عن نسخة أندرويد. اختر ملف APK الأساسي "
+                + "وقطعه المنقسمة معًا لإضافتها كتطبيق واحد.")
+         }
+     }
+@@ -645,7 +667,7 @@
+                     Label("إزالة", systemImage: "trash")
+                 }
+             } footer: {
+-                Text("يحذف نسخة Husk من ملفات APK. أي شيء مثبت في أندرويد لا يُمس.")
++                Text("يحذف نسخة ios app من ملفات APK. أي شيء مثبت في أندرويد لا يُمس.")
+             }
+         }
+         .huskForm()
+@@ -924,7 +946,7 @@
+                 // is closed, so it cannot be part of what closes.
+                 HStack(spacing: 10) {
+                     Button {
+-                        withAnimation(.snappy(duration: 0.25)) { showLog.toggle() }
++                        withAnimation(.easeOut(duration: 0.25)) { showLog.toggle() }
+                     } label: {
+                         HStack(spacing: 6) {
+                             Image(systemName: showLog ? "chevron.down" : "chevron.right")
+@@ -954,7 +976,7 @@
+                 .padding(.vertical, 8)
+                 .contentShape(Rectangle())
+                 .onTapGesture {
+-                    if !showLog { withAnimation(.snappy(duration: 0.25)) { showLog = true } }
++                    if !showLog { withAnimation(.easeOut(duration: 0.25)) { showLog = true } }
+                 }
+ 
+                 }
+--- a/src/translation-layer/husk-tl-dex.c
++++ b/src/translation-layer/husk-tl-dex.c
+@@ -4,6 +4,7 @@
+ #include "husk-tl-framework.h"
+ #include "husk-tl-internal.h"
+ #include "husk-tl.h"
++#include "../translation-layer-next/husk-tl-dexindex.h"
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+@@ -396,8 +397,9 @@
+ 
+ static tl_dex_file *parse_dex_buffer(tl_dex_context *ctx, uint8_t *data, size_t size)
+ {
+-    if (size < sizeof(dex_header)) return NULL;
+-    if (memcmp(data, "dex\n", 4) != 0) return NULL;
++    // Validate all tables, strings and class_data before the legacy parser
++    // creates pointers into the file. Bytecode execution is still experimental.
++    if (!tl_dex_validate_bytes(data, size)) return NULL;
+ 
+     const dex_header *hdr = (const dex_header *)data;
+     tl_dex_file *dex = calloc(1, sizeof(*dex));
+--- a/src/translation-layer/husk-tl-internal.h
++++ b/src/translation-layer/husk-tl-internal.h
+@@ -74,6 +74,7 @@
+     char    *name;
+     uint16_t method;        /* 0 stored, 8 deflated */
+     uint16_t flags;
++    uint32_t crc32;
+     uint64_t csize;
+     uint64_t usize;
+     uint64_t local_offset;
+--- a/src/translation-layer/husk-tl-zip.c
++++ b/src/translation-layer/husk-tl-zip.c
+@@ -65,7 +65,7 @@
+     uint64_t lowest = z->size > 22 + 0xFFFF ? z->size - 22 - 0xFFFF : 0;
+     for (uint64_t i = z->size - 22 + 1; i-- > lowest;) {
+         const uint8_t *p = z->map + i;
+-        if (rd32(p) == SIG_END && i + 22 + rd16(p + 20) <= z->size) {
++        if (rd32(p) == SIG_END && i + 22 + rd16(p + 20) == z->size) {
+             *at = i;
+             return true;
+         }
+@@ -79,7 +79,7 @@
+ static bool apply_zip64_extra(const uint8_t *extra, uint16_t len, tl_zip_entry *e,
+                               bool need_usize, bool need_csize, bool need_offset)
+ {
+-    uint16_t pos = 0;
++    size_t pos = 0;
+     while ((uint32_t)pos + 4 <= len) {
+         uint16_t id = rd16(extra + pos);
+         uint16_t size = rd16(extra + pos + 2);
+@@ -103,7 +103,7 @@
+             }
+             return true;
+         }
+-        pos = (uint16_t)(pos + 4 + size);
++        pos += 4u + size;
+     }
+     return !(need_usize || need_csize || need_offset);
+ }
+@@ -141,6 +141,11 @@
+         return false;
+     }
+     const uint8_t *e = z->map + end;
++    if (rd16(e + 4) != 0 || rd16(e + 6) != 0 || rd16(e + 8) != rd16(e + 10)) {
++        fail(err, errlen, "multi-disk ZIP is unsupported");
++        tl_zip_close(z);
++        return false;
++    }
+     uint64_t count = rd16(e + 10);
+     uint64_t cd_size = rd32(e + 12);
+     uint64_t cd_off = rd32(e + 16);
+@@ -162,7 +167,7 @@
+         cd_off = rd64(z->map + rec + 48);
+     }
+ 
+-    if (!in_file(z, cd_off, cd_size)) {
++    if (!in_file(z, cd_off, cd_size) || cd_off > end || cd_size > end - cd_off) {
+         fail(err, errlen, "central directory lies outside the file");
+         tl_zip_close(z);
+         return false;
+@@ -203,6 +208,7 @@
+         tl_zip_entry *en = &z->entries[z->count];
+         en->flags = rd16(c + 8);
+         en->method = rd16(c + 10);
++        en->crc32 = rd32(c + 16);
+         en->csize = rd32(c + 20);
+         en->usize = rd32(c + 24);
+         en->local_offset = rd32(c + 42);
+@@ -286,7 +292,18 @@
+         return false;
+     }
+     const uint8_t *l = z->map + e->local_offset;
++    if (rd16(l + 8) != e->method || rd16(l + 6) != e->flags) {
++        fail(err, errlen, "%s: local and central headers disagree", e->name);
++        return false;
++    }
+     uint64_t data_off = e->local_offset + 30ull + rd16(l + 26) + rd16(l + 28);
++    uint16_t local_name_len = rd16(l + 26);
++    if (!in_file(z, e->local_offset + 30, local_name_len)
++        || strlen(e->name) != local_name_len
++        || memcmp(l + 30, e->name, local_name_len) != 0) {
++        fail(err, errlen, "%s: local filename differs", e->name);
++        return false;
++    }
+     if (!in_file(z, data_off, e->csize)) {
+         fail(err, errlen, "%s runs past the end of the file", e->name);
+         return false;
+@@ -296,6 +313,16 @@
+     if (e->method == 0) {
+         if (e->csize != e->usize) {
+             fail(err, errlen, "%s: stored entry with mismatched sizes", e->name);
++            return false;
++        }
++        uLong crc = crc32(0L, Z_NULL, 0);
++        for (uint64_t off = 0; off < e->usize;) {
++            uInt n = e->usize - off > 0x40000000u ? 0x40000000u : (uInt)(e->usize - off);
++            crc = crc32(crc, data + off, n);
++            off += n;
++        }
++        if ((uint32_t)crc != e->crc32) {
++            fail(err, errlen, "%s: CRC mismatch", e->name);
+             return false;
+         }
+         *out = data;
+@@ -325,6 +352,7 @@
+     const uint8_t *in = data;
+     uint8_t *dst = buf;
+     int rc = Z_OK;
++    uint8_t overflow_byte;
+     while (rc == Z_OK) {
+         if (zs.avail_in == 0 && in_left > 0) {
+             uInt n = in_left > 0x40000000u ? 0x40000000u : (uInt)in_left;
+@@ -340,18 +368,37 @@
+             dst += n;
+             out_left -= n;
+         }
++        // Even an empty deflate stream needs output space for zlib to consume
++        // its end marker. One spare byte also detects lying uncompressed sizes.
++        if (zs.avail_out == 0 && out_left == 0) {
++            zs.next_out = &overflow_byte;
++            zs.avail_out = 1;
++        }
+         if (zs.avail_in == 0 && zs.avail_out == 0) {
+             break;
+         }
+         /* Z_BUF_ERROR ends the loop too: out of input before the end marker,
+          * or more output than the directory promised. Both are damage. */
+         rc = inflate(&zs, Z_NO_FLUSH);
++        if (zs.total_out > e->usize) { rc = Z_DATA_ERROR; break; }
+     }
+     uint64_t produced = zs.total_out;
++    uint64_t consumed = zs.total_in;
+     inflateEnd(&zs);
+-    if (rc != Z_STREAM_END || produced != e->usize) {
++    if (rc != Z_STREAM_END || produced != e->usize || consumed != e->csize) {
+         free(buf);
+         fail(err, errlen, "%s did not inflate cleanly", e->name);
++        return false;
++    }
++    uLong crc = crc32(0L, Z_NULL, 0);
++    for (uint64_t off = 0; off < produced;) {
++        uInt n = produced - off > 0x40000000u ? 0x40000000u : (uInt)(produced - off);
++        crc = crc32(crc, buf + off, n);
++        off += n;
++    }
++    if ((uint32_t)crc != e->crc32) {
++        free(buf);
++        fail(err, errlen, "%s: CRC mismatch", e->name);
+         return false;
+     }
+     *out = buf;
+--- a/src/translation-layer-next/husk-tl-dexindex.c
++++ b/src/translation-layer-next/husk-tl-dexindex.c
+@@ -21,30 +21,136 @@
+ static size_t g_tab_n;
+ static int g_classes;
+ 
+-static uint32_t u32(const dexfile *x, size_t o) { uint32_t v; memcpy(&v, x->d + o, 4); return v; }
+-static uint16_t u16(const dexfile *x, size_t o) { uint16_t v; memcpy(&v, x->d + o, 2); return v; }
++static bool span(const dexfile *x, size_t o, size_t n) { return o <= x->size && n <= x->size - o; }
++static uint32_t u32(const dexfile *x, size_t o) { uint32_t v = 0; if (span(x, o, 4)) memcpy(&v, x->d + o, 4); return v; }
++static uint16_t u16(const dexfile *x, size_t o) { uint16_t v = 0; if (span(x, o, 2)) memcpy(&v, x->d + o, 2); return v; }
+ 
+ static uint32_t uleb(const dexfile *x, size_t *o)
+ {
+-    uint32_t r = 0; unsigned sh = 0;
+-    for (;;) { uint8_t b = x->d[(*o)++]; r |= (uint32_t)(b & 0x7f) << sh; if (!(b & 0x80)) break; sh += 7; }
+-    return r;
++    uint32_t r = 0;
++    for (unsigned i = 0; i < 5; i++) {
++        if (!span(x, *o, 1)) break;
++        uint8_t b = x->d[(*o)++];
++        if (i == 4 && (b & 0xf0)) break;
++        r |= (uint32_t)(b & 0x7f) << (7 * i);
++        if (!(b & 0x80)) return r;
++    }
++    *o = x->size + 1;
++    return UINT32_MAX;
+ }
+ 
+ /* The UTF-8 bytes of string_ids[i], NUL-terminated inside the dex. */
+ static const char *str_of(const dexfile *x, uint32_t i)
+ {
++    if (i >= x->nstr) return "";
+     size_t o = u32(x, x->str_off + 4 * (size_t)i);
+     uleb(x, &o);
++    if (!span(x, o, 1)) return "";
++    size_t remaining = x->size - o;
++    if (!memchr(x->d + o, 0, remaining < 65536 ? remaining : 65536)) return "";
+     return (const char *)x->d + o;
+ }
+-static const char *type_of(const dexfile *x, uint32_t t) { return str_of(x, u32(x, x->type_off + 4 * (size_t)t)); }
++static const char *type_of(const dexfile *x, uint32_t t) { return t < x->ntype ? str_of(x, u32(x, x->type_off + 4 * (size_t)t)) : ""; }
++
++static bool table_span(const dexfile *x, uint32_t off, uint32_t count, size_t stride)
++{
++    return (!count || (off >= 112 && off % 4 == 0))
++        && span(x, off, (size_t)count * stride);
++}
++
++bool tl_dex_validate_bytes(const uint8_t *data, size_t size)
++{
++    if (!data || size < 112 || size > 256 * 1024 * 1024
++        || memcmp(data, "dex\n", 4) || data[7] != 0) return false;
++    dexfile x = { .d = data, .size = size };
++    if (u32(&x, 0x20) != size || u32(&x, 0x24) != 112 || u32(&x, 0x28) != 0x12345678) return false;
++    x.nstr = u32(&x, 0x38); x.str_off = u32(&x, 0x3c);
++    x.ntype = u32(&x, 0x40); x.type_off = u32(&x, 0x44);
++    x.nproto = u32(&x, 0x48); x.proto_off = u32(&x, 0x4c);
++    x.nfield = u32(&x, 0x50); x.field_off = u32(&x, 0x54);
++    x.nmeth = u32(&x, 0x58); x.meth_off = u32(&x, 0x5c);
++    x.nclass = u32(&x, 0x60); x.class_off = u32(&x, 0x64);
++    if (x.nstr > 1048576 || x.ntype > 65535 || x.nproto > 65535
++        || x.nfield > 1048576 || x.nmeth > 1048576 || x.nclass > 262144
++        || !table_span(&x, x.str_off, x.nstr, 4)
++        || !table_span(&x, x.type_off, x.ntype, 4)
++        || !table_span(&x, x.proto_off, x.nproto, 12)
++        || !table_span(&x, x.field_off, x.nfield, 8)
++        || !table_span(&x, x.meth_off, x.nmeth, 8)
++        || !table_span(&x, x.class_off, x.nclass, 32)) return false;
++    for (uint32_t i = 0; i < x.nstr; i++) {
++        size_t off = u32(&x, x.str_off + (size_t)4 * i);
++        if (off < 112 || !span(&x, off, 1)) return false;
++        uleb(&x, &off);
++        if (!span(&x, off, 1)) return false;
++        size_t left = size - off;
++        if (!memchr(data + off, 0, left < 65536 ? left : 65536)) return false;
++    }
++    for (uint32_t i = 0; i < x.ntype; i++)
++        if (u32(&x, x.type_off + (size_t)4 * i) >= x.nstr) return false;
++    for (uint32_t i = 0; i < x.nproto; i++) {
++        size_t p = x.proto_off + (size_t)12 * i;
++        if (u32(&x, p) >= x.nstr || u32(&x, p + 4) >= x.ntype) return false;
++        uint32_t params = u32(&x, p + 8);
++        if (params) {
++            if (params % 4 || !span(&x, params, 4)) return false;
++            uint32_t n = u32(&x, params);
++            if (n > 65535 || !span(&x, (size_t)params + 4, (size_t)n * 2)) return false;
++            for (uint32_t k = 0; k < n; k++)
++                if (u16(&x, (size_t)params + 4 + (size_t)k * 2) >= x.ntype) return false;
++        }
++    }
++    for (uint32_t i = 0; i < x.nfield; i++) {
++        size_t p = x.field_off + (size_t)8 * i;
++        if (u16(&x, p) >= x.ntype || u16(&x, p + 2) >= x.ntype || u32(&x, p + 4) >= x.nstr) return false;
++    }
++    for (uint32_t i = 0; i < x.nmeth; i++) {
++        size_t p = x.meth_off + (size_t)8 * i;
++        if (u16(&x, p) >= x.ntype || u16(&x, p + 2) >= x.nproto || u32(&x, p + 4) >= x.nstr) return false;
++    }
++    uint64_t member_total = 0;
++    for (uint32_t i = 0; i < x.nclass; i++) {
++        size_t p = x.class_off + (size_t)32 * i;
++        uint32_t tid = u32(&x, p), sup = u32(&x, p + 8), cdata = u32(&x, p + 24);
++        if (tid >= x.ntype || (sup != UINT32_MAX && sup >= x.ntype)) return false;
++        if (!cdata) continue;
++        size_t off = cdata;
++        uint32_t counts[4];
++        for (int k = 0; k < 4; k++) counts[k] = uleb(&x, &off);
++        if (off > size || (uint64_t)counts[0] + counts[1] > x.nfield
++            || (uint64_t)counts[2] + counts[3] > x.nmeth) return false;
++        for (int group = 0; group < 4; group++) {
++            member_total += counts[group];
++            if (member_total > 1048576) return false;
++            uint32_t idx = 0;
++            for (uint32_t k = 0; k < counts[group]; k++) {
++                uint32_t delta = uleb(&x, &off);
++                if (delta > UINT32_MAX - idx) return false;
++                idx += delta;
++                (void)uleb(&x, &off);
++                if (idx >= (group < 2 ? x.nfield : x.nmeth) || off > size) return false;
++                if (group >= 2) {
++                    uint32_t code = uleb(&x, &off);
++                    if (off > size) return false;
++                    if (code) {
++                        if (code % 4 || !span(&x, code, 16)) return false;
++                        uint32_t units = u32(&x, (size_t)code + 12);
++                        if (!span(&x, (size_t)code + 16, (size_t)units * 2)
++                            || u16(&x, (size_t)code + 2) > u16(&x, code)) return false;
++                    }
++                }
++            }
++        }
++    }
++    return true;
++}
+ 
+ /* "Lcom/a/B;" -> "com/a/B" (compared in place; no copy). */
+ static bool desc_eq(const char *desc, const char *name)
+ {
+     size_t n = strlen(name);
+-    return desc[0] == 'L' && !strncmp(desc + 1, name, n) && desc[1 + n] == ';' && desc[2 + n] == 0;
++    return strlen(desc) == n + 2 && desc[0] == 'L'
++        && !memcmp(desc + 1, name, n) && desc[1 + n] == ';';
+ }
+ 
+ static uint64_t hash_name(const char *s, size_t n)
+@@ -58,6 +164,8 @@
+ 
+ static void insert(int dex, uint32_t def, const char *desc)
+ {
++    size_t len = strlen(desc);
++    if (len < 3 || desc[0] != 'L' || desc[len - 1] != ';') return;
+     size_t i = hash_desc(desc) & (g_tab_n - 1);
+     while (g_tab[i].dex) i = (i + 1) & (g_tab_n - 1);
+     g_tab[i].dex = dex + 1;
+@@ -68,16 +176,22 @@
+ {
+     tl_zip z; char err[160];
+     if (!tl_zip_open(&z, apk_path, err, sizeof(err))) return -1;
+-    size_t total = 0;
++    size_t total = 0, bytes = 0;
++    for (int i = 0; i < g_ndex; i++) { total += g_dex[i].nclass; bytes += g_dex[i].size; }
+     for (int n = 1; n <= 16 && g_ndex < 16; n++) {
+         char name[32];
+         if (n == 1) snprintf(name, sizeof(name), "classes.dex"); else snprintf(name, sizeof(name), "classes%d.dex", n);
+         const tl_zip_entry *e = tl_zip_find(&z, name);
+         if (!e) { if (n > 1) break; continue; }
+         const uint8_t *data; size_t len; bool owned;
+-        if (!tl_zip_data(&z, e, (size_t)1 << 28, &data, &len, &owned, err, sizeof(err))) return -1;
++        if (!tl_zip_data(&z, e, (size_t)1 << 28, &data, &len, &owned, err, sizeof(err))) goto bad;
++        if (!tl_dex_validate_bytes(data, len) || bytes + len > (size_t)512 * 1024 * 1024) {
++            if (owned) free((void *)data);
++            goto bad;
++        }
+         if (!owned) {                         /* stored: it points into the APK mapping, which closing would unmap */
+             uint8_t *copy = malloc(len);
++            if (!copy) goto bad;
+             memcpy(copy, data, len);
+             data = copy;
+         }
+@@ -89,13 +203,24 @@
+         memcpy(&x->nfield, data + 0x50, 4); memcpy(&x->field_off, data + 0x54, 4);
+         memcpy(&x->nmeth, data + 0x58, 4); memcpy(&x->meth_off, data + 0x5c, 4);
+         memcpy(&x->nclass, data + 0x60, 4); memcpy(&x->class_off, data + 0x64, 4);
++        if (u32(x, 0x20) != len || u32(x, 0x24) != 112 || u32(x, 0x28) != 0x12345678
++            || !span(x, x->str_off, (size_t)x->nstr * 4)
++            || !span(x, x->type_off, (size_t)x->ntype * 4)
++            || !span(x, x->proto_off, (size_t)x->nproto * 12)
++            || !span(x, x->field_off, (size_t)x->nfield * 8)
++            || !span(x, x->meth_off, (size_t)x->nmeth * 8)
++            || !span(x, x->class_off, (size_t)x->nclass * 32)
++            || x->nclass > 262144 || total + x->nclass > 262144) goto bad;
+         total += x->nclass;
++        bytes += len;
+     }
+     /* A zip kept open would pin the mapping; the dex bytes are copied or inflated, so close it. */
+     tl_zip_close(&z);
+     g_tab_n = 1;
+     while (g_tab_n < total * 2 + 16) g_tab_n <<= 1;
++    free(g_tab);
+     g_tab = calloc(g_tab_n, sizeof(cls_ref));
++    if (!g_tab) goto bad;
+     for (int di = 0; di < g_ndex; di++) {
+         dexfile *x = &g_dex[di];
+         for (uint32_t c = 0; c < x->nclass; c++) {
+@@ -105,6 +230,13 @@
+     }
+     g_classes = (int)total;
+     return g_classes;
++bad:
++    tl_zip_close(&z);
++    for (int i = 0; i < g_ndex; i++) free((void *)g_dex[i].d);
++    memset(g_dex, 0, sizeof(g_dex));
++    g_ndex = 0;
++    free(g_tab); g_tab = NULL; g_tab_n = 0; g_classes = 0;
++    return -1;
+ }
+ 
+ static const cls_ref *lookup(const char *name)
+@@ -139,12 +271,16 @@
+ /* "(Landroid/content/Context;)V" for proto_ids[i]. */
+ static void proto_sig(const dexfile *x, uint32_t pi, char *out, size_t n)
+ {
+-    size_t po = x->proto_off + 12u * pi;
++    if (!out || n == 0) return;
++    out[0] = 0;
++    if (n < 4 || pi >= x->nproto) return;
++    size_t po = x->proto_off + (size_t)12 * pi;
+     uint32_t ret = u32(x, po + 4), params = u32(x, po + 8);
+     size_t k = 0;
+     out[k++] = '(';
+     if (params) {
+         uint32_t cnt = u32(x, params);
++        if (!span(x, (size_t)params + 4, (size_t)cnt * 2)) { out[0] = 0; return; }
+         for (uint32_t i = 0; i < cnt; i++) {
+             const char *t = type_of(x, u16(x, params + 4 + 2u * i));
+             size_t l = strlen(t);
+@@ -169,22 +305,27 @@
+     size_t o = cdata;
+     uint32_t nsf = uleb(x, &o), nif = uleb(x, &o), ndm = uleb(x, &o), nvm = uleb(x, &o);
+     uint32_t counts[4] = { nsf, nif, ndm, nvm };
++    if (o > x->size || nsf > x->nfield || nif > x->nfield
++        || ndm > x->nmeth || nvm > x->nmeth) return false;
+     for (int group = 0; group < 4; group++) {
+         bool method_group = group >= 2;
+         uint32_t idx = 0;
+         for (uint32_t i = 0; i < counts[group]; i++) {
+-            idx += uleb(x, &o);
++            uint32_t delta = uleb(x, &o);
++            if (delta > UINT32_MAX - idx) return false;
++            idx += delta;
+             uint32_t flags = uleb(x, &o);
+             if (method_group) uleb(x, &o);              /* code_off */
++            if (o > x->size || idx >= (method_group ? x->nmeth : x->nfield)) return false;
+             if (method_group != want_method) continue;
+             if (method_group) {
+-                size_t mo = x->meth_off + 8u * idx;
++                size_t mo = x->meth_off + (size_t)8 * idx;
+                 uint32_t nameidx = u32(x, mo + 4); uint16_t protoidx = u16(x, mo + 2);
+                 if (strcmp(str_of(x, nameidx), name)) continue;
+                 if (sig && *sig) { char ps[512]; proto_sig(x, protoidx, ps, sizeof(ps)); if (strcmp(ps, sig)) continue; }
+                 if (sig_out) proto_sig(x, protoidx, sig_out, sig_n);
+             } else {
+-                size_t fo = x->field_off + 8u * idx;
++                size_t fo = x->field_off + (size_t)8 * idx;
+                 uint16_t typeidx = u16(x, fo + 2); uint32_t nameidx = u32(x, fo + 4);
+                 if (strcmp(str_of(x, nameidx), name)) continue;
+                 if (sig && *sig && strcmp(type_of(x, typeidx), sig)) continue;
+@@ -234,15 +375,20 @@
+     size_t o = cdata;
+     uint32_t nsf = uleb(x, &o), nif = uleb(x, &o), ndm = uleb(x, &o), nvm = uleb(x, &o);
+     uint32_t counts[4] = { nsf, nif, ndm, nvm };
++    if (o > x->size || nsf > x->nfield || nif > x->nfield
++        || ndm > x->nmeth || nvm > x->nmeth) return false;
+     int best = -1;
+     for (int group = 0; group < 4; group++) {
+         uint32_t idx = 0;
+         for (uint32_t i = 0; i < counts[group]; i++) {
+-            idx += uleb(x, &o);
++            uint32_t delta = uleb(x, &o);
++            if (delta > UINT32_MAX - idx) return false;
++            idx += delta;
+             uint32_t flags = uleb(x, &o);
+             if (group >= 2) uleb(x, &o);
++            if (o > x->size || idx >= (group >= 2 ? x->nmeth : x->nfield)) return false;
+             if (group < 2) continue;
+-            size_t mo = x->meth_off + 8u * idx;
++            size_t mo = x->meth_off + (size_t)8 * idx;
+             if (strcmp(str_of(x, u32(x, mo + 4)), name)) continue;
+             char ps[512]; proto_sig(x, u16(x, mo + 2), ps, sizeof(ps));
+             const char *dp[40]; int dl[40]; const char *dret;
+--- a/src/translation-layer-next/husk-tl-dexindex.h
++++ b/src/translation-layer-next/husk-tl-dexindex.h
+@@ -24,6 +24,9 @@
+ /* Index every classes*.dex in the APK. Returns the number of classes, or -1. */
+ int tl_dexidx_open(const char *apk_path);
+ 
++/* Structural validation only. This is NOT a bytecode verifier or sandbox. */
++bool tl_dex_validate_bytes(const uint8_t *data, size_t size);
++
+ /* `name` in JNI form: "com/unity3d/player/UnityPlayer". */
+ bool tl_dexidx_has_class(const char *name);
+ 
+--- a/src/translation-layer-next/husk-tl-http.m
++++ b/src/translation-layer-next/husk-tl-http.m
+@@ -25,6 +25,8 @@
+         NSURLSessionConfiguration *cfg = [NSURLSessionConfiguration defaultSessionConfiguration];
+         cfg.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+         cfg.URLCache = nil;
++        cfg.timeoutIntervalForRequest = 60;
++        cfg.timeoutIntervalForResource = 300;
+         session = [NSURLSession sessionWithConfiguration:cfg delegate:[TLHttpNoRedirect new] delegateQueue:nil];
+     });
+     return session;
+@@ -38,10 +40,18 @@
+ 
+ bool tl_http_perform(const tl_http_request *req, tl_http_response *out)
+ {
++    if (!req || !out) return false;
+     memset(out, 0, sizeof(*out));
+     @autoreleasepool {
+         NSURL *url = req->url ? [NSURL URLWithString:@(req->url)] : nil;
+-        if (!url || !url.scheme) { put_message(out, TL_HTTP_MALFORMED_URL, [NSString stringWithFormat:@"Malformed URL: %s", req->url ?: ""]); return false; }
++        if (!url || ![url.scheme.lowercaseString isEqualToString:@"https"]
++            || !url.host.length || url.user || url.password
++            || req->nheaders < 0 || req->nheaders > 1024
++            || (req->nheaders && (!req->header_names || !req->header_values))
++            || (req->body_len && !req->body) || req->body_len > 64 * 1024 * 1024) {
++            put_message(out, TL_HTTP_MALFORMED_URL, @"HTTPS URL and valid bounded request required");
++            return false;
++        }
+         NSMutableURLRequest *r = [NSMutableURLRequest requestWithURL:url];
+         r.HTTPMethod = req->method && req->method[0] ? @(req->method) : @"GET";
+         r.timeoutInterval = req->timeout_ms > 0 ? req->timeout_ms / 1000.0 : 300.0;
+@@ -78,6 +88,11 @@
+         NSDictionary *fields = http.allHeaderFields;
+         out->header_names = calloc(fields.count + 1, sizeof(char *));
+         out->header_values = calloc(fields.count + 1, sizeof(char *));
++        if (!out->header_names || !out->header_values) {
++            tl_http_response_free(out);
++            put_message(out, TL_HTTP_SDK, @"Not enough memory for HTTP headers");
++            return false;
++        }
+         out->header_names[0] = strdup("Status");
+         out->header_values[0] = strdup([NSString stringWithFormat:@"HTTP/1.1 %d %@", out->status, [NSHTTPURLResponse localizedStringForStatusCode:http.statusCode]].UTF8String);
+         out->nheaders = 1;
+@@ -87,13 +102,30 @@
+             out->header_values[out->nheaders] = strdup(v.UTF8String ?: "");
+             out->nheaders++;
+         }
+-        if (data.length) { out->body = malloc(data.length); memcpy(out->body, data.bytes, data.length); out->body_len = data.length; }
++        for (int i = 0; i < out->nheaders; i++) {
++            if (!out->header_names[i] || !out->header_values[i]) {
++                tl_http_response_free(out);
++                put_message(out, TL_HTTP_SDK, @"Not enough memory for HTTP header text");
++                return false;
++            }
++        }
++        if (data.length) {
++            out->body = malloc(data.length);
++            if (!out->body) {
++                tl_http_response_free(out);
++                put_message(out, TL_HTTP_SDK, @"Not enough memory for HTTP body");
++                return false;
++            }
++            memcpy(out->body, data.bytes, data.length);
++            out->body_len = data.length;
++        }
+         return true;
+     }
+ }
+ 
+ void tl_http_response_free(tl_http_response *r)
+ {
++    if (!r) return;
+     for (int i = 0; i < r->nheaders; i++) { free(r->header_names[i]); free(r->header_values[i]); }
+     free(r->header_names); free(r->header_values); free(r->body);
+     memset(r, 0, sizeof(*r));
+--- a/tests/parser_harness.c
++++ b/tests/parser_harness.c
+@@ -0,0 +1,35 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++#include "husk-tl-internal.h"
++#include "husk-tl-dexindex.h"
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++int main(int argc, char **argv)
++{
++    if (argc != 3) return 2;
++    if (!strcmp(argv[1], "dex")) {
++        int count = tl_dexidx_open(argv[2]);
++        if (count < 0) return 1;
++        char output[512]; bool st;
++        (void)tl_dexidx_has_class("test/A");
++        (void)tl_dexidx_super("test/A", output, sizeof(output));
++        (void)tl_dexidx_declares_method("test/A", "run", "()V", &st);
++        (void)tl_dexidx_declares_field("test/A", "value", "I", &st);
++        (void)tl_dexidx_find_method_lenient("test/A", "run", "()V", output, sizeof(output), &st);
++        puts("dex accepted");
++        return 0;
++    }
++    tl_zip z; char err[200];
++    if (!tl_zip_open(&z, argv[2], err, sizeof(err))) return 1;
++    bool ok = true;
++    for (size_t i = 0; i < z.count; i++) {
++        const uint8_t *data; size_t len; bool owned;
++        if (!tl_zip_data(&z, &z.entries[i], 1024 * 1024, &data, &len, &owned, err, sizeof(err))) {
++            ok = false; break;
++        }
++        if (owned) free((void *)data);
++    }
++    tl_zip_close(&z);
++    return ok ? 0 : 1;
++}
+--- a/tests/security_regression.py
++++ b/tests/security_regression.py
+@@ -0,0 +1,108 @@
++#!/usr/bin/env python3
++"""Portable parser regression checks; not a replacement for an iOS build."""
++from pathlib import Path
++import io
++import os
++import random
++import shutil
++import struct
++import subprocess
++import tempfile
++import zipfile
++
++ROOT = Path(__file__).resolve().parents[1]
++
++def archive(name, data, compression=zipfile.ZIP_STORED):
++    stream = io.BytesIO()
++    with zipfile.ZipFile(stream, "w", compression=compression) as z:
++        z.writestr(name, data)
++    return stream.getvalue()
++
++def dex_fixture():
++    # A minimal DEX defining test/A. Checksum/signature are not used by the
++    # name index, which is not a full DEX verifier.
++    data = bytearray(170)
++    data[:8] = b"dex\n035\0"
++    for off, value in {0x20:170, 0x24:112, 0x28:0x12345678,
++                       0x38:1, 0x3c:112, 0x40:1, 0x44:116,
++                       0x60:1, 0x64:120}.items():
++        struct.pack_into("<I", data, off, value)
++    struct.pack_into("<I", data, 112, 152)
++    struct.pack_into("<I", data, 128, 0xffffffff)
++    data[152:162] = b"\x08Ltest/A;\0"
++    return bytes(data)
++
++def main():
++    cc = os.environ.get("CC") or shutil.which("cc") or shutil.which("gcc")
++    if not cc:
++        raise SystemExit("C compiler required")
++    with tempfile.TemporaryDirectory(prefix="ios-app-tests-") as temp:
++        temp = Path(temp)
++        binary = temp / "parser"
++        flags = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-g",
++                 "-fsanitize=undefined", "-fno-sanitize-recover=all"]
++        if os.environ.get("ASAN") == "1":
++            flags.append("-fsanitize=address")
++        subprocess.run([cc, *flags, "-I", str(ROOT/"src/translation-layer"),
++            "-I", str(ROOT/"src/translation-layer-next"),
++            str(ROOT/"tests/parser_harness.c"),
++            str(ROOT/"src/translation-layer/husk-tl-zip.c"),
++            str(ROOT/"src/translation-layer-next/husk-tl-dexindex.c"),
++            "-lz", "-o", str(binary)], check=True)
++        checks = 0
++        def check(mode, content, expected=None):
++            nonlocal checks
++            path = temp / "input.apk"
++            path.write_bytes(content)
++            run = subprocess.run([str(binary), mode, str(path)], capture_output=True, timeout=5)
++            assert run.returncode in (0, 1), (run.returncode, run.stderr.decode(errors="replace"))
++            assert b"runtime error:" not in run.stderr, run.stderr
++            if expected is not None:
++                assert (run.returncode == 0) == expected, (mode, run.stdout, run.stderr)
++            checks += 1
++
++        for compression in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
++            for content in (b"", b"hello", b"x" * 65536):
++                check("zip", archive("asset.bin", content, compression), True)
++        good = archive("asset.bin", b"hello")
++        broken = bytearray(good)
++        broken[30 + len("asset.bin")] ^= 1
++        check("zip", bytes(broken), False)  # stored CRC
++        broken = bytearray(good)
++        broken[30] ^= 1
++        check("zip", bytes(broken), False)  # local/central filename disagreement
++        check("zip", good + b"trailing junk", False)
++        check("zip", b"not a zip", False)
++        dex = dex_fixture()
++        check("dex", archive("classes.dex", dex), True)
++        for malformed in (b"", b"dex\n035\0", dex[:64],
++                          dex[:40] + b"\xff" * 4 + dex[44:]):
++            check("dex", archive("classes.dex", malformed), False)
++        malformed = bytearray(dex)
++        struct.pack_into("<I", malformed, 0x60, 0xffffffff)
++        check("dex", archive("classes.dex", malformed), False)
++        malformed = bytearray(dex)
++        struct.pack_into("<I", malformed, 112, len(malformed)-1)
++        malformed[-1] = 0xff
++        check("dex", archive("classes.dex", malformed))  # truncated ULEB
++        malformed = bytearray(dex)
++        struct.pack_into("<I", malformed, 144, len(malformed)-1)
++        malformed[-1] = 0xff
++        check("dex", archive("classes.dex", malformed))  # malformed class_data
++        rng = random.Random(6062)
++        for i in range(300):
++            mutated = bytearray(dex)
++            for _ in range(rng.randint(1, 8)):
++                mutated[rng.randrange(len(mutated))] = rng.randrange(256)
++            check("dex", archive("classes.dex", mutated))
++        for i in range(300):
++            mutated = bytearray(good)
++            for _ in range(rng.randint(1, 8)):
++                mutated[rng.randrange(len(mutated))] = rng.randrange(256)
++            check("zip", mutated)
++        sanitizers = "ASan + UBSan" if os.environ.get("ASAN") == "1" else "UBSan"
++        print(f"PASS: {checks} parser regression/mutation inputs, {sanitizers} enabled.")
++        print("NOT TESTED: Swift typechecking, Xcode linking, signing, iPhone runtime, remote dependencies.")
++
++if __name__ == "__main__":
++    main()
+--- a/validation-results.txt
++++ b/validation-results.txt
+@@ -0,0 +1,8 @@
++PASS: 618 parser regression/mutation inputs, UBSan enabled.
++NOT TESTED: Swift typechecking, Xcode linking, signing, iPhone runtime, remote dependencies.
++
++PASS: 618 parser regression/mutation inputs, ASan + UBSan enabled.
++NOT TESTED: Swift typechecking, Xcode linking, signing, iPhone runtime, remote dependencies.
++
++PASS: plist/entitlements XML, asset JSON and referenced files, opaque 1024px icons, shell syntax, app display name and ATS configuration.
++Swift/Objective-C/Xcode/iPhone NOT tested.

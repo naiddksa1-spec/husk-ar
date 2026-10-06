@@ -19,8 +19,12 @@ import UniformTypeIdentifiers
 /// nothing here changes how the rest of Husk runs.
 enum TranslationLayer {
     static let enabledKey = "husk.translationLayer"
+    static let trustKey = "ios-app.nativeRuntimeTrust"
 
-    static var isEnabled: Bool { UserDefaults.standard.bool(forKey: enabledKey) }
+    static var isEnabled: Bool {
+        UserDefaults.standard.bool(forKey: enabledKey)
+            && UserDefaults.standard.bool(forKey: trustKey)
+    }
 
     /// Whether the technical detail is shown: library reports, device checks, logs. Off, the screens carry
     /// only what is needed to add an app, switch the layer on and run it. Set in Settings > About.
@@ -73,8 +77,8 @@ extension TLReport {
         guard runsOnNativeRuntime else { return summary }
         let flagged = libraries.filter { $0.abi == "arm64-v8a" && $0.status != "ok" }.count
         let total = libraries.filter { $0.abi == "arm64-v8a" }.count
-        var text = "لعبة \(nativeEngineName). تعمل عبر بيئة التشغيل الأصلية في IOS APP، التي تحمّل مكتباتها الـ \(total) من نوع arm64 بنفسها."
-        if nativeEngine == .cocos || nativeEngine == .minecraft { text += " إنها لعبة أفقية: IOS APP يدير الشاشة لأجلها." }
+        var text = "لعبة \(nativeEngineName). تعمل عبر بيئة التشغيل الأصلية في Husk، التي تحمّل مكتباتها الـ \(total) من نوع arm64 بنفسها."
+        if nativeEngine == .cocos || nativeEngine == .minecraft { text += " إنها لعبة أفقية: Husk يدير الشاشة لأجلها." }
         if flagged > 0 {
             text += " \(flagged) منها تستخدم حيلًا لم يستطع المحمّل القديم التعامل معها؛ بيئة التشغيل الأصلية تتعامل معها أيضًا، "
                   + "باستثناء كود الحماية من العبث الاختياري، الذي تتجاوزه."
@@ -264,7 +268,7 @@ final class TranslationLayerStore: ObservableObject {
         } catch {
             try? fm.removeItem(at: dir)
             HuskLog.log("tl", "FAILED to add: \(error.localizedDescription)")
-            return "تعذّر على IOS APP نسخه: \(error.localizedDescription)"
+            return "تعذّر على Husk نسخه: \(error.localizedDescription)"
         }
 
         let apks = ((try? fm.contentsOfDirectory(atPath: dir.path)) ?? [])
@@ -351,6 +355,7 @@ struct TranslationLayerSettings: View {
     @ObservedObject private var store = TranslationLayerStore.shared
     @State private var enabled = TranslationLayer.isEnabled
     @State private var importing = false
+    @State private var confirmingTrust = false
     @AppStorage(TranslationLayer.devInfoKey) private var devInfo = false
 
     var body: some View {
@@ -358,15 +363,21 @@ struct TranslationLayerSettings: View {
             Section {
                 Toggle("Android Translation Layer", isOn: $enabled)
                     .onChange(of: enabled) { v in
-                        UserDefaults.standard.set(v, forKey: TranslationLayer.enabledKey)
-                        HuskLog.log("ui", v ? "translation layer on" : "translation layer off")
+                        if v && !UserDefaults.standard.bool(forKey: TranslationLayer.trustKey) {
+                            enabled = false
+                            confirmingTrust = true
+                        } else {
+                            UserDefaults.standard.set(v, forKey: TranslationLayer.enabledKey)
+                            HuskLog.log("ui", v ? "translation layer on" : "translation layer off")
+                        }
                     }
             } header: {
                 Text("تجريبي")
             } footer: {
                 if !devInfo {
                     Text("يشغّل بعض تطبيقات أندرويد، مثل ألعاب Unity و cocos2d-x، مباشرة على آيفونك دون تشغيل "
-                       + "أندرويد. تجريبي، ويحتاج تفعيل JIT.")
+                       + "أندرويد. الكود يعمل داخل عملية ios app، وليس داخل آلة أندرويد المعزولة. "
+                       + "لا تشغّل فيه ملفات APK مجهولة المصدر.")
                 } else {
                 Text("يشغّل كود التطبيق نفسه مباشرة، مقابل إعادة كتابة لإطار "
                    + "عمل أندرويد، بدلًا من إقلاع نظام أندرويد كامل — نفس "
@@ -386,6 +397,17 @@ struct TranslationLayerSettings: View {
             }
         }
         .huskForm()
+        .alert("تشغيل كود داخل التطبيق", isPresented: $confirmingTrust) {
+            Button("إلغاء", role: .cancel) {}
+            Button("أفهم المخاطر، فعّل") {
+                UserDefaults.standard.set(true, forKey: TranslationLayer.trustKey)
+                UserDefaults.standard.set(true, forKey: TranslationLayer.enabledKey)
+                enabled = true
+            }
+        } message: {
+            Text("التشغيل الأصلي تجريبي وليس حاجزًا أمنيًا. قد يصل كود APK إلى ملفات التطبيق "
+               + "أو يتسبب في تعطله. استخدم تطبيقات موثوقة فقط؛ تشغيلها داخل أندرويد هو الخيار الأقل مخاطرة.")
+        }
         .navigationTitle("Translation Layer")
         .huskFilePicker(isPresented: $importing) { urls in
             HuskLog.log("ui", "translation layer: adding \(urls.count) file(s): "
@@ -426,7 +448,7 @@ struct TranslationLayerSettings: View {
         } header: {
             Text("التطبيقات")
         } footer: {
-            Text("يحتفظ IOS APP بنسخته الخاصة، منفصلة عن نسخة أندرويد. اختر ملف APK الأساسي "
+            Text("يحتفظ ios app بنسخته الخاصة، منفصلة عن نسخة أندرويد. اختر ملف APK الأساسي "
                + "وقطعه المنقسمة معًا لإضافتها كتطبيق واحد.")
         }
     }
@@ -475,7 +497,7 @@ struct TranslationLayerSettings: View {
         } header: {
             Text("أين وصلنا")
         } footer: {
-            Text("الخطة بالترتيب موجودة في docs/04-translation-layer.md ضمن سورس IOS APP.")
+            Text("الخطة بالترتيب موجودة في docs/04-translation-layer.md ضمن سورس Husk.")
         }
     }
 }
@@ -591,7 +613,7 @@ struct TLAppReportView: View {
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(Theme.accent)
                         Spacer()
-                        Image(systemName: "chevron.forward")
+                        Image(systemName: "chevron.right")
                             .font(.caption.bold())
                             .foregroundStyle(Theme.textDim.opacity(0.5))
                     }
@@ -645,7 +667,7 @@ struct TLAppReportView: View {
                     Label("إزالة", systemImage: "trash")
                 }
             } footer: {
-                Text("يحذف نسخة IOS APP من ملفات APK. أي شيء مثبت في أندرويد لا يُمس.")
+                Text("يحذف نسخة ios app من ملفات APK. أي شيء مثبت في أندرويد لا يُمس.")
             }
         }
         .huskForm()
@@ -666,7 +688,6 @@ struct TLAppReportView: View {
         .fullScreenCover(isPresented: Binding(get: { showAttempt && app.report?.runsOnNativeRuntime == true },
                                               set: { showAttempt = $0 })) {
             TLAttemptView(app: app)
-                .statusBarHidden(true)
         }
     }
 
@@ -925,10 +946,10 @@ struct TLClassicAttemptView: View {
                 // is closed, so it cannot be part of what closes.
                 HStack(spacing: 10) {
                     Button {
-                        withAnimation(.snappy(duration: 0.25)) { showLog.toggle() }
+                        withAnimation(.easeOut(duration: 0.25)) { showLog.toggle() }
                     } label: {
                         HStack(spacing: 6) {
-                            Image(systemName: showLog ? "chevron.down" : "chevron.forward")
+                            Image(systemName: showLog ? "chevron.down" : "chevron.right")
                                 .font(.system(size: 11, weight: .bold))
                                 .frame(width: 12)
                             Text("سجلّ المحاولة")
@@ -955,7 +976,7 @@ struct TLClassicAttemptView: View {
                 .padding(.vertical, 8)
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    if !showLog { withAnimation(.snappy(duration: 0.25)) { showLog = true } }
+                    if !showLog { withAnimation(.easeOut(duration: 0.25)) { showLog = true } }
                 }
 
                 }

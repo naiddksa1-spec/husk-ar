@@ -25,13 +25,13 @@ struct LibraryView: View {
                     grid
                 }
             }
-            .navigationTitle("IOS APP")
+            .navigationTitle("ios app")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button { importing = true } label: { Image(systemName: "plus") }
                         .accessibilityLabel("إضافة APK")
                 }
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItem(placement: .navigationBarLeading) {
                     Button { showLogs = true } label: {
                         Image(systemName: "doc.text.magnifyingglass")
                     }
@@ -175,7 +175,7 @@ struct RunningAppView: View {
             if showChrome {
                 HStack(spacing: 10) {
                     Button(action: onExit) {
-                        Label(app.name, systemImage: "chevron.backward")
+                        Label(app.name, systemImage: "chevron.left")
                             .font(.footnote.weight(.medium))
                     }
                     Button { keyboard.toggle() } label: {

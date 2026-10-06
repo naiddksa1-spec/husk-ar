@@ -64,7 +64,7 @@ final class GuestImage: ObservableObject {
     static let imageVersion = "v12"
 
     /// Version shared by the blank userdata seed and downloaded snapshots.
-    nonisolated private static let userdataSeedVersion = "v10"
+    private static let userdataSeedVersion = "v10"
 
     /// Whether to fetch the pre-booted snapshot rather than boot from cold.
     static var wantsSnapshot: Bool {
@@ -189,11 +189,15 @@ final class GuestImage: ObservableObject {
         guard let data = FileManager.default.contents(atPath: snapshotPinsPath),
               let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let mib = j["guestMiB"] as? Int,
-              let x = j["xres"] as? Int, let y = j["yres"] as? Int
+              let x = j["xres"] as? Int, let y = j["yres"] as? Int,
+              (256...4096).contains(mib), (128...4096).contains(x), (128...4096).contains(y),
+              (1...8).contains(j["smp"] as? Int ?? Self.defaultSmp)
         else { return fallback }
+        let cpu = j["cpu"] as? String ?? Self.defaultCpu
+        guard [Self.defaultCpu, "max", "cortex-a72"].contains(cpu) else { return fallback }
         return (mib, x, y,
                 j["smp"] as? Int ?? Self.defaultSmp,
-                j["cpu"] as? String ?? Self.defaultCpu)
+                cpu)
     }
 
     /// What this build uses when a snapshot does not say otherwise.
@@ -211,8 +215,16 @@ final class GuestImage: ObservableObject {
     /// strings, which cannot detect either of the two ways it has actually gone
     /// wrong: a stamp that outlived the files it described, and an asset
     /// published under a new name carrying the old bytes.
+    private var checkingUpdates = false
+    private var lastUpdateCheck: Date?
+
     func checkForUpdates() async {
+        guard !checkingUpdates else { return }
+        if let lastUpdateCheck, Date().timeIntervalSince(lastUpdateCheck) < 600 { return }
+        checkingUpdates = true
+        defer { checkingUpdates = false }
         guard let m = await GuestManifest.fetch() else { return }
+        lastUpdateCheck = Date()
         manifest = m
         snapshotPinsToRecord = m.snapshot
 
@@ -359,7 +371,7 @@ final class GuestImage: ObservableObject {
     /// than dead: the bridge still folds it into the log every poll, replaying
     /// Debian and Waydroid text long after either existed, which reads exactly
     /// like a live guest saying the wrong thing.
-    nonisolated private func cleanUpPreviousGuest() {
+    private func cleanUpPreviousGuest() {
         let fm = FileManager.default
         let stale = ["husk-guest.qcow2", "husk-guest.version",
                      "edk2-vars.fd", "edk2-vars.fd.layout",
@@ -378,13 +390,7 @@ final class GuestImage: ObservableObject {
         }
     }
 
-    /// يعمل خارج الخيط الرئيسي: أول تشغيل ينسخ عشرات الميغابايت من الحزمة،
-    /// وكان ذلك يجمّد الشاشة الأولى. محمي بقفل حتى لا يتسابق استدعاءان.
-    nonisolated private static let stagingLock = NSLock()
-
-    nonisolated func prepareFirmware() throws {
-        Self.stagingLock.lock()
-        defer { Self.stagingLock.unlock() }
+    func prepareFirmware() throws {
         cleanUpPreviousGuest()
         let fm = FileManager.default
         if !fm.fileExists(atPath: firmwarePath) {

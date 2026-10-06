@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 import SwiftUI
 
-/// المكتبة — أُعيد تصميمها من الصفر كشاشة رئيسية بأسلوب آيفون:
-/// بطاقة حالة كبيرة في الأعلى، ثم شبكة أيقونات مثل الشاشة الرئيسية، وبحث
-/// أصلي من شريط التنقل.
+/// Where the apps are.
 ///
-/// The catalogue is written to disk the first time the guest reports its apps,
-/// so the grid is on screen the instant the app opens.
+/// A launcher, not a view onto the bridge. The catalogue is written to disk the
+/// first time the guest reports its apps, so the grid is on screen the instant
+/// Husk opens — a minute before Android can answer for itself. Everything you
+/// can do without the guest (look, read, decide) works straight away; the one
+/// thing that needs it, opening an app, waits, and says so.
 struct LibraryTab: View {
     @ObservedObject private var host = AndroidHost.shared
     @ObservedObject private var runner = QemuRunner.shared
@@ -19,43 +20,18 @@ struct LibraryTab: View {
     @State private var importing = false
     @State private var query = ""
     @State private var filter = "All"
+    @FocusState private var searchFocused: Bool
 
-    private let columns = [GridItem(.adaptive(minimum: 76, maximum: 96), spacing: 18,
-                                    alignment: .top)]
+    private let columns = [GridItem(.adaptive(minimum: 92, maximum: 140), spacing: 20)]
 
     var body: some View {
         NavigationStack(path: $router.library) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    statusCard
-                    if let busy = host.busy { busyBanner(busy) }
-                    if !categories.isEmpty { chips }
-                    grid
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
-                .padding(.bottom, 32)
+            ZStack {
+                Theme.backdrop
+                content
             }
-            .background(Theme.backdrop)
-            .navigationTitle("التطبيقات")
-            .navigationBarTitleDisplayMode(.large)
-            .searchable(text: $query, prompt: "ابحث في تطبيقاتك")
-            .toolbar {
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    if started {
-                        Button(action: onOpenGuest) {
-                            Image(systemName: "iphone.gen3")
-                        }
-                        .accessibilityLabel("عرض أندرويد")
-                    }
-                    Button { importing = true } label: {
-                        Image(systemName: "plus.circle.fill")
-                            .symbolRenderingMode(.hierarchical)
-                            .font(.system(size: 20))
-                    }
-                    .accessibilityLabel("تثبيت APK")
-                }
-            }
+            .navigationBarHidden(true)
+            .toolbar(.visible, for: .tabBar)
             .navigationDestination(for: AndroidHost.Package.self) { app in
                 AppDetailView(app: app, onOpenGuest: onOpenGuest)
             }
@@ -67,109 +43,147 @@ struct LibraryTab: View {
         }
     }
 
-    // MARK: status
+    // MARK: content
 
-    private enum Phase { case ready, booting, stopped, noJIT }
+    @ViewBuilder private var content: some View {
+        ScrollView {
+            VStack(spacing: 24) {
+                HuskHeader(mark: true, title: "المكتبة") {
+                    HStack(spacing: 10) {
+                        // Android itself, from the library, whenever it is up.
+                        // It used to be reachable only while it was starting,
+                        // or by opening an app -- so once it was ready there
+                        // was no way to simply look at it.
+                        if started {
+                            CircleButton(systemImage: "rectangle.inset.filled",
+                                         action: onOpenGuest)
+                        }
+                        CircleButton(systemImage: "plus") { importing = true }
+                    }
+                }
 
-    private var phase: Phase {
-        if host.isReady { return .ready }
-        if started { return .booting }
-        return JITBootstrap.isDebuggerAttached ? .stopped : .noJIT
-    }
+                // Always there, not behind a button. Searching is what you do
+                // with a list of apps; making it a mode you enter first is a
+                // step between you and the thing you came for.
+                if !host.packages.isEmpty { searchField }
+                if !host.isReady { machineStrip }
+                if let busy = host.busy { busyStrip(busy) }
+                if !categories.isEmpty { chips }
 
-    /// بطاقة واحدة كبيرة تقول حالة أندرويد وتعرض الإجراء الوحيد المهم الآن.
-    private var statusCard: some View {
-        HStack(spacing: 16) {
-            ZStack {
-                Circle().fill(statusTint.opacity(0.15)).frame(width: 52, height: 52)
-                if phase == .booting {
-                    ProgressView().tint(statusTint)
-                } else {
-                    Image(systemName: statusSymbol)
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(statusTint)
+                if !shown.isEmpty {
+                    LazyVGrid(columns: columns, spacing: 28) {
+                        ForEach(shown) { app in
+                            NavigationLink(value: app) {
+                                AppCard(app: app, dimmed: !host.isReady)
+                            }
+                            .buttonStyle(CardButtonStyle())
+                            .contextMenu {
+                                Button {
+                                    host.launch(app.name) { onOpenGuest() }
+                                } label: { Label("تشغيل", systemImage: "play.fill") }
+                                .disabled(!host.isReady || host.busy != nil)
+                                Button {
+                                    router.library.append(app)
+                                } label: { Label("التفاصيل", systemImage: "info.circle") }
+                            }
+                        }
+                    }
+                } else if !query.isEmpty {
+                    EmptyState(title: "لا نتائج",
+                               message: "لا يوجد تطبيق مثبّت باسم “\(query)”.",
+                               systemImage: "magnifyingglass")
+                } else if host.packages.isEmpty && host.isReady {
+                    EmptyState(title: "لا تطبيقات بعد",
+                               message: "ثبّت ملف APK وسيظهر هنا. الحزم المقسّمة "
+                                      + "مدعومة أيضًا — اختر كل القطع معًا.",
+                               systemImage: "square.grid.2x2",
+                               actionTitle: "تثبيت APK",
+                               action: { importing = true })
                 }
             }
-            VStack(alignment: .leading, spacing: 4) {
-                Text(statusTitle)
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Theme.text)
-                if phase == .booting, runner.bootProgress > 0 {
-                    ProgressView(value: Double(runner.bootProgress), total: 100)
-                        .progressViewStyle(.linear).tint(statusTint)
-                    Text("\(runner.bootProgress)٪ · \(host.status)")
-                        .font(.system(size: 12)).foregroundStyle(Theme.textDim).lineLimit(1)
-                } else {
-                    Text(statusDetail)
-                        .font(.system(size: 13)).foregroundStyle(Theme.textDim)
-                        .lineLimit(2)
+            .padding(.horizontal, 24)
+            .padding(.top, 6)
+            .padding(.bottom, 28)
+        }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Theme.textDim)
+            TextField("ابحث في التطبيقات", text: $query)
+                .focused($searchFocused)
+                .foregroundStyle(Theme.text)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+            if !query.isEmpty {
+                Button { query = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(Theme.textDim)
                 }
-            }
-            Spacer(minLength: 4)
-            if let title = statusAction {
-                Button(title) {
-                    if started { onOpenGuest() } else { onStartAndroid() }
-                }
-                .buttonStyle(PillButtonStyle(filled: phase != .ready))
+                .buttonStyle(.plain)
             }
         }
-        .padding(16)
-        .huskElevated()
+        .padding(.horizontal, 14).padding(.vertical, 11)
+        .huskCard(RoundedRectangle(cornerRadius: Theme.rowCorner, style: .continuous),
+                  high: true)
     }
 
-    private var statusTint: Color {
-        switch phase {
-        case .ready: return Theme.good
-        case .booting: return Theme.accent
-        case .stopped: return Theme.accent
-        case .noJIT: return Theme.warn
-        }
-    }
-
-    private var statusSymbol: String {
-        switch phase {
-        case .ready: return "checkmark"
-        case .booting: return "hourglass"
-        case .stopped: return "power"
-        case .noJIT: return "bolt.slash.fill"
-        }
-    }
-
-    private var statusTitle: String {
-        switch phase {
-        case .ready: return "أندرويد يعمل"
-        case .booting: return "جارٍ تشغيل أندرويد"
-        case .stopped: return "أندرويد متوقف"
-        case .noJIT: return "يلزم تفعيل JIT"
-        }
-    }
-
-    private var statusDetail: String {
-        switch phase {
-        case .ready: return "\(host.packages.count) تطبيق جاهز للفتح"
-        case .booting: return host.status
-        case .stopped: return "شغّله لفتح تطبيقاتك."
-        case .noJIT: return "افتح IOS APP من StikDebug ليعمل أندرويد."
-        }
-    }
-
-    private var statusAction: String? {
-        switch phase {
-        case .ready: return "عرض"
-        case .booting: return "عرض"
-        case .stopped: return "تشغيل"
-        case .noJIT: return "تفعيل"
-        }
-    }
-
-    private func busyBanner(_ text: String) -> some View {
+    /// One line about the machine, only while it cannot open anything.
+    private var machineStrip: some View {
         HStack(spacing: 12) {
+            ZStack {
+                Circle().fill(Theme.accentSoft).frame(width: 32, height: 32)
+                if started {
+                    ProgressView().scaleEffect(0.6).tint(Theme.accent)
+                } else {
+                    Image(systemName: "power")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                }
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                Text(started ? "جارٍ تشغيل أندرويد" : "أندرويد لا يعمل")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.text)
+                if started, runner.bootProgress > 0 {
+                    ProgressView(value: Double(runner.bootProgress), total: 100)
+                        .progressViewStyle(.linear).tint(Theme.accent)
+                        .frame(height: 3)
+                } else {
+                    Text(started ? host.status
+                                 : JITBootstrap.isDebuggerAttached
+                                   ? "تطبيقاتك هنا؛ شغّله لفتحها."
+                                   : "يحتاج ios app إلى JIT لتشغيل أندرويد.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textDim)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 6)
+            Button(started ? "عرض" : JITBootstrap.isDebuggerAttached ? "تشغيل" : "JIT") {
+                if started { onOpenGuest() } else { onStartAndroid() }
+            }
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            .background(Theme.accent, in: Capsule())
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 13).padding(.vertical, 11)
+        .huskCard(RoundedRectangle(cornerRadius: Theme.rowCorner, style: .continuous))
+    }
+
+    private func busyStrip(_ text: String) -> some View {
+        HStack(spacing: 11) {
             ProgressView().tint(Theme.accent)
-            Text(text).font(.system(size: 14)).foregroundStyle(Theme.text).lineLimit(2)
+            Text(text).font(.system(size: 13)).foregroundStyle(Theme.text).lineLimit(2)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 16).padding(.vertical, 13)
-        .huskCard()
+        .padding(.horizontal, 14).padding(.vertical, 12)
+        .huskCard(RoundedRectangle(cornerRadius: Theme.rowCorner, style: .continuous),
+                  high: true)
     }
 
     private var chips: some View {
@@ -180,49 +194,15 @@ struct LibraryTab: View {
                     Chip(title: plural(c), selected: filter == c) { filter = c }
                 }
             }
-        }
-    }
-
-    // MARK: grid
-
-    @ViewBuilder private var grid: some View {
-        if !shown.isEmpty {
-            LazyVGrid(columns: columns, alignment: .center, spacing: 22) {
-                ForEach(shown) { app in
-                    NavigationLink(value: app) {
-                        AppCard(app: app, dimmed: !host.isReady)
-                    }
-                    .buttonStyle(CardButtonStyle())
-                    .contextMenu {
-                        Button {
-                            host.launch(app.name) { onOpenGuest() }
-                        } label: { Label("فتح", systemImage: "play.fill") }
-                        .disabled(!host.isReady || host.busy != nil)
-                        Button {
-                            router.library.append(app)
-                        } label: { Label("التفاصيل", systemImage: "info.circle") }
-                        Button {
-                            UIPasteboard.general.string = app.name
-                        } label: { Label("نسخ اسم الحزمة", systemImage: "doc.on.doc") }
-                    }
-                }
-            }
-        } else if !query.isEmpty {
-            EmptyState(title: "لا نتائج",
-                       message: "لا يوجد تطبيق مثبّت باسم “\(query)”.",
-                       systemImage: "magnifyingglass")
-        } else if host.packages.isEmpty {
-            EmptyState(title: "لا تطبيقات بعد",
-                       message: "ثبّت ملف APK وسيظهر هنا. الحزم المقسّمة مدعومة — "
-                              + "اختر كل القطع معًا.",
-                       systemImage: "square.grid.3x3.square",
-                       actionTitle: "تثبيت APK",
-                       action: { importing = true })
+            .padding(.horizontal, 1)
         }
     }
 
     // MARK: what to show
 
+    /// The categories Android actually reported. When it reported none — which
+    /// for sideloaded APKs is the usual answer — there are no chips at all
+    /// rather than a row of filters that all show the same thing.
     private var categories: [String] {
         let set = Set(host.packages.compactMap(\.category))
         return ["Game", "App", "Tool"].filter { set.contains($0) }
@@ -244,23 +224,29 @@ struct LibraryTab: View {
     }
 }
 
-/// تطبيق واحد كما في الشاشة الرئيسية للآيفون: أيقونة واسم تحتها.
+/// One app, as a card: its icon, its name, and what kind of thing it is.
 struct AppCard: View {
     let app: AndroidHost.Package
     var dimmed = false
 
     var body: some View {
-        VStack(spacing: 7) {
-            AppIcon(path: app.iconPath, size: 64)
-                .shadow(color: Theme.shadow, radius: 6, y: 3)
-                .opacity(dimmed ? 0.55 : 1)
-            Text(app.label)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Theme.text)
-                .lineLimit(1)
-                .frame(maxWidth: 84)
+        VStack(spacing: 10) {
+            AppIcon(path: app.iconPath, size: 68)
+                .opacity(dimmed ? 0.65 : 1)
+            VStack(spacing: 3) {
+                Text(app.label)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Theme.text)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                Text(app.category ?? app.bitness ?? " ")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textDim)
+                    .lineLimit(1)
+            }
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .top)
+        .frame(minHeight: 112, alignment: .top)
         .contentShape(Rectangle())
     }
 }

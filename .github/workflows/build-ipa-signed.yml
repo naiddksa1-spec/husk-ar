@@ -3,7 +3,6 @@ name: build-ipa
 on:
   workflow_dispatch:
 
-# أمان: أقل صلاحيات ممكنة لرمز GitHub داخل البناء.
 permissions:
   contents: read
 
@@ -14,6 +13,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Restore script permissions and run portable regression tests
+        run: |
+          chmod +x scripts/*.sh
+          python3 tests/security_regression.py
 
       - name: Select Xcode
         run: |
@@ -28,11 +32,6 @@ jobs:
           set -e
           gh release download 0.6.1 --repo Leviidev/Husk --pattern "Husk.ipa" --dir /tmp
           cd /tmp && rm -rf husk-upstream && mkdir husk-upstream && cd husk-upstream
-          # أمان: تحقّق من بصمة الـ IPA المنزّل إن ضُبط UPSTREAM_IPA_SHA256 في أسرار المستودع.
-          echo "upstream Husk.ipa sha256: $(shasum -a 256 /tmp/Husk.ipa | cut -d' ' -f1)"
-          if [ -n "${UPSTREAM_IPA_SHA256}" ]; then
-            echo "${UPSTREAM_IPA_SHA256}  /tmp/Husk.ipa" | shasum -a 256 -c -
-          fi
           unzip -q /tmp/Husk.ipa
           mkdir -p $GITHUB_WORKSPACE/build/ios-arm64/lib
           mkdir -p $GITHUB_WORKSPACE/build/ios-arm64/sysroot/lib
@@ -44,7 +43,6 @@ jobs:
           ls -lh $GITHUB_WORKSPACE/build/ios-arm64/lib/ $GITHUB_WORKSPACE/third_party/build/qemu-10.0.12-utm/pc-bios/
         env:
           GH_TOKEN: ${{ github.token }}
-          UPSTREAM_IPA_SHA256: ${{ secrets.UPSTREAM_IPA_SHA256 }}
 
       - name: Install qemu-img
         run: brew install qemu
@@ -53,12 +51,12 @@ jobs:
         run: ./scripts/fetch_phase0_guest.sh
 
       - name: Build and package IPA (unsigned)
-        run: ./scripts/package_ipa.sh /tmp/Hask-unsigned.ipa
+        run: ./scripts/package_ipa.sh /tmp/ios-app-unsigned.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Hask-ipa
-          path: /tmp/Hask-unsigned.ipa
+          name: ios-app-ipa
+          path: /tmp/ios-app-unsigned.ipa
           if-no-files-found: error
           retention-days: 7

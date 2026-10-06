@@ -76,12 +76,18 @@ struct GuestManifest: Codable, Equatable {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse,
-                  (200...299).contains(http.statusCode) else {
+                  (200...299).contains(http.statusCode),
+                  data.count <= 1024 * 1024,
+                  response.url?.scheme?.lowercased() == "https" else {
                 HuskLog.log("guest", "manifest unavailable (HTTP "
                           + "\((response as? HTTPURLResponse)?.statusCode ?? 0))")
                 return nil
             }
             let manifest = try JSONDecoder().decode(GuestManifest.self, from: data)
+            guard manifest.isValid else {
+                HuskLog.log("guest", "manifest rejected: invalid filenames, hashes or machine limits")
+                return nil
+            }
             HuskLog.log("guest", "manifest \(manifest.generation): image "
                       + "\(manifest.image.sha256.prefix(12))…, snapshot "
                       + "\(manifest.snapshot.sha256.prefix(12))…")
@@ -93,8 +99,26 @@ struct GuestManifest: Codable, Equatable {
     }
 
     func url(for file: String) -> URL {
-        URL(string: "https://github.com/Leviidev/Husk/releases/download/"
-                  + "\(GuestImage.dependenciesTag)/\(file)")!
+        URL(string: "https://github.com/Leviidev/Husk/releases/download/")!
+            .appendingPathComponent(GuestImage.dependenciesTag)
+            .appendingPathComponent(file)
+    }
+
+    var isValid: Bool {
+        SourceValidation.fileName(image.file)
+            && SourceValidation.digest(image.sha256) == image.sha256
+            && SourceValidation.digest(snapshot.sha256) == snapshot.sha256
+            && image.size > 0 && image.size <= 16 * 1024 * 1024 * 1024
+            && snapshot.size > 0 && snapshot.size <= 16 * 1024 * 1024 * 1024
+            && !snapshot.parts.isEmpty && snapshot.parts.count <= 32
+            && Set(snapshot.parts).count == snapshot.parts.count
+            && snapshot.parts.allSatisfy(SourceValidation.fileName)
+            && (256...4096).contains(snapshot.guestMiB)
+            && (128...4096).contains(snapshot.xres)
+            && (128...4096).contains(snapshot.yres)
+            && (1...8).contains(snapshot.smp ?? 4)
+            && (snapshot.cpu == nil || snapshot.cpu == GuestImage.defaultCpu
+                || snapshot.cpu == "max" || snapshot.cpu == "cortex-a72")
     }
 
     var partURLs: [URL] { snapshot.parts.map { url(for: $0) } }
@@ -165,8 +189,12 @@ final class DigestWriter {
         guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
         defer { try? handle.close() }
         let writer = DigestWriter()
-        while let chunk = try? handle.read(upToCount: 4 << 20), !chunk.isEmpty {
-            writer.update(chunk)
+        do {
+            while let chunk = try handle.read(upToCount: 4 << 20), !chunk.isEmpty {
+                writer.update(chunk)
+            }
+        } catch {
+            return nil
         }
         return writer.finish()
     }

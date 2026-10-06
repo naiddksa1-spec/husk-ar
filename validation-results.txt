@@ -1,0 +1,8 @@
+PASS: 618 parser regression/mutation inputs, UBSan enabled.
+NOT TESTED: Swift typechecking, Xcode linking, signing, iPhone runtime, remote dependencies.
+
+PASS: 618 parser regression/mutation inputs, ASan + UBSan enabled.
+NOT TESTED: Swift typechecking, Xcode linking, signing, iPhone runtime, remote dependencies.
+
+PASS: plist/entitlements XML, asset JSON and referenced files, opaque 1024px icons, shell syntax, app display name and ATS configuration.
+Swift/Objective-C/Xcode/iPhone NOT tested.

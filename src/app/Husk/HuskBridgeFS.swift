@@ -867,8 +867,10 @@ final class AndroidHost: ObservableObject {
         guard let data = try? Data(contentsOf: catalogueURL),
               let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
         else { return [] }
+        var seen: Set<String> = []
         return rows.compactMap { row in
-            guard let name = row["name"] as? String, !name.isEmpty else { return nil }
+            guard let name = row["name"] as? String, SourceValidation.package(name),
+                  seen.insert(name).inserted else { return nil }
             let icon = (row["icon"] as? String) ?? ""
             let used = row["lastUsed"] as? Double
             return Package(name: name,
@@ -960,16 +962,17 @@ final class AndroidHost: ObservableObject {
     nonisolated func refreshPackages() async {
         do {
             let raw = try GuestBridge.shared.shell("pm list packages -3", timeout: 60)
-            let names = raw.split(separator: "\n")
+            let names = Array(Set(raw.split(separator: "\n")
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { $0.hasPrefix("package:") }
                 .map { String($0.dropFirst("package:".count)) }
-                .filter { !$0.isEmpty }
+                .filter { SourceValidation.package($0) })).sorted()
             // Android's own labels and icons, in one round trip for every app
             // at once, before anything is put on screen.
             let known = names.isEmpty ? [:] : await self.launcherCatalogue()
             var labels: [String: String] = [:]
             for (package, entry) in known {
+                guard SourceValidation.package(package) else { continue }
                 if let label = entry.label { labels[package] = label }
                 guard let icon = entry.icon else { continue }
                 let dest = Self.iconDirectory.appendingPathComponent("\(package).png")
@@ -1051,7 +1054,7 @@ final class AndroidHost: ObservableObject {
                 return [:]
             }
 
-            let db = try GuestBridge.shared.pull("cat \(path)", timeout: 120)
+            let db = try GuestBridge.shared.pull("cat \(Self.quote(path))", timeout: 120)
             guard db.prefix(6) == Data("SQLite".utf8) else {
                 HuskLog.log("bridge", "\(path) is not a SQLite file (\(db.count) bytes)")
                 return [:]
@@ -1064,7 +1067,7 @@ final class AndroidHost: ObservableObject {
             // an app installed this session, most of all -- are in the sidecar
             // rather than the file itself. Brought along so SQLite can replay
             // it; harmless when there is nothing to replay.
-            if let wal = try? GuestBridge.shared.pull("cat \(path)-wal", timeout: 120),
+            if let wal = try? GuestBridge.shared.pull("cat \(Self.quote(path + "-wal"))", timeout: 120),
                wal.count > 32 {
                 try? wal.write(to: Self.support.appendingPathComponent(
                     "launcher-icons.db-wal"))
@@ -1290,17 +1293,7 @@ final class AndroidHost: ObservableObject {
     /// Single-quoted for a shell, with any quote of its own removed. A guest
     /// filename is chosen by whoever made the file and reaches a shell verbatim.
     nonisolated static func quote(_ path: String) -> String {
-        "'" + path.replacingOccurrences(of: "'", with: "")
-                  .replacingOccurrences(of: "\0", with: "") + "'"
-    }
-
-    /// أمان: اسم الحزمة يصل إلى shell داخل أندرويد كما هو. يأتي من فهارس
-    /// خارجية ومن ملفات APK لا نثق بها، فاسم مثل `a;reboot` كان سيُنفَّذ كأمر.
-    /// هذا هو شكل أسماء حزم أندرويد الصحيح فقط، وكل ما عداه يُرفض.
-    nonisolated static func isValidPackage(_ name: String) -> Bool {
-        guard !name.isEmpty, name.count <= 255 else { return false }
-        return name.range(of: #"^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$"#,
-                          options: .regularExpression) != nil
+        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     /// Ask an app what it is called and what it looks like.
@@ -1313,6 +1306,7 @@ final class AndroidHost: ObservableObject {
     /// table, read the way `aapt` reads them, which needs nothing but the file
     /// itself. Only if that fails does it fall back to guessing at filenames.
     nonisolated private func fetchAppInfo(for package: String) async {
+        guard SourceValidation.package(package) else { return }
         let dest = Self.iconDirectory.appendingPathComponent("\(package).png")
         let haveIcon = FileManager.default.fileExists(atPath: dest.path)
         let haveLabel = await MainActor.run {
@@ -1322,7 +1316,6 @@ final class AndroidHost: ObservableObject {
         }
         if haveIcon && haveLabel { return }
 
-        guard Self.isValidPackage(package) else { return }
         do {
             let paths = try GuestBridge.shared.shell("pm path \(package)", timeout: 30)
             let apks = paths.split(separator: "\n")
@@ -1495,14 +1488,8 @@ final class AndroidHost: ObservableObject {
 
                     // Quoted and stripped of any path: a filename is chosen by
                     // whoever made the file, and it reaches a shell verbatim.
-                    // أمان: يُزال أيضًا "/" و"\0"، ويُرفض "." و".." حتى لا يخرج
-                    // الملف من المجلد المقصود.
-                    var safe = name.replacingOccurrences(of: "'", with: "")
-                        .replacingOccurrences(of: "/", with: "_")
-                        .replacingOccurrences(of: "\0", with: "")
-                    if safe.isEmpty || safe == "." || safe == ".." { safe = "file" }
-                    let safeDir = directory.replacingOccurrences(of: "'", with: "")
-                    let remote = "\(safeDir)/\(safe)"
+                    let safe = name.replacingOccurrences(of: "'", with: "")
+                    let remote = "\(directory)/\(safe)"
                     _ = try? GuestBridge.shared.shell(
                         "mkdir -p \(Self.quote(directory))")
                     try GuestBridge.shared.push(file, to: "'\(remote)'") { p in
@@ -1514,7 +1501,7 @@ final class AndroidHost: ObservableObject {
                     // media database is what Android's file pickers read.
                     _ = try? GuestBridge.shared.shell(
                         "am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE "
-                      + "-d \(Self.quote("file://" + remote))", timeout: 60)
+                      + "-d file://\(remote)", timeout: 60)
                     HuskLog.log("bridge", "sent \(name) to Download")
                     sent += 1
                 } catch {
@@ -1567,10 +1554,7 @@ final class AndroidHost: ObservableObject {
     }
 
     func uninstall(_ package: String) {
-        guard Self.isValidPackage(package) else {
-            HuskLog.log("bridge", "refusing to uninstall an invalid package name")
-            return
-        }
+        guard SourceValidation.package(package), busy == nil else { return }
         busy = "جارٍ إزالة \(package)…"
         Task.detached { [weak self] in
             var out = (try? GuestBridge.shared.shell("pm uninstall \(package)",
@@ -1922,10 +1906,7 @@ final class AndroidHost: ObservableObject {
     }
 
     func launch(_ pkg: String, then: @escaping () -> Void) {
-        guard Self.isValidPackage(pkg) else {
-            HuskLog.log("bridge", "refusing to launch an invalid package name")
-            return
-        }
+        guard SourceValidation.package(pkg), isReady, busy == nil else { return }
         markLaunched(pkg)
         busy = "جارٍ الفتح…"
         Task.detached { [weak self] in
