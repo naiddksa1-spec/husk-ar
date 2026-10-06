@@ -3,6 +3,10 @@ name: build-ipa
 on:
   workflow_dispatch:
 
+# أمان: أقل صلاحيات ممكنة لرمز GitHub داخل البناء.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: macos-15
@@ -24,6 +28,11 @@ jobs:
           set -e
           gh release download 0.6.1 --repo Leviidev/Husk --pattern "Husk.ipa" --dir /tmp
           cd /tmp && rm -rf husk-upstream && mkdir husk-upstream && cd husk-upstream
+          # أمان: تحقّق من بصمة الـ IPA المنزّل إن ضُبط UPSTREAM_IPA_SHA256 في أسرار المستودع.
+          echo "upstream Husk.ipa sha256: $(shasum -a 256 /tmp/Husk.ipa | cut -d' ' -f1)"
+          if [ -n "${UPSTREAM_IPA_SHA256}" ]; then
+            echo "${UPSTREAM_IPA_SHA256}  /tmp/Husk.ipa" | shasum -a 256 -c -
+          fi
           unzip -q /tmp/Husk.ipa
           mkdir -p $GITHUB_WORKSPACE/build/ios-arm64/lib
           mkdir -p $GITHUB_WORKSPACE/build/ios-arm64/sysroot/lib
@@ -35,6 +44,7 @@ jobs:
           ls -lh $GITHUB_WORKSPACE/build/ios-arm64/lib/ $GITHUB_WORKSPACE/third_party/build/qemu-10.0.12-utm/pc-bios/
         env:
           GH_TOKEN: ${{ github.token }}
+          UPSTREAM_IPA_SHA256: ${{ secrets.UPSTREAM_IPA_SHA256 }}
 
       - name: Install qemu-img
         run: brew install qemu

@@ -27,6 +27,8 @@ enum Onboarding {
     }
 }
 
+/// الترحيب — مصمم من الصفر على نمط شاشات "مرحبًا" في تطبيقات آبل: عنوان كبير،
+/// قائمة مزايا برموز ملوّنة، ثم الخيارات كمفاتيح أصلية، وزر ثابت في الأسفل.
 struct OnboardingView: View {
     let onDone: () -> Void
 
@@ -36,50 +38,45 @@ struct OnboardingView: View {
     @State private var sound = UserDefaults.standard.bool(forKey: "husk.sound")
     @State private var autoSave =
         UserDefaults.standard.object(forKey: "husk.autoSave") as? Bool ?? true
-    @Environment(\.colorScheme) private var scheme
 
     private let pages = 3
 
     var body: some View {
-        ZStack {
-            Theme.backdrop
-
-            VStack(spacing: 0) {
-                TabView(selection: $page) {
-                    welcome.tag(0)
-                    choices.tag(1)
-                    ready.tag(2)
-                }
-                .tabViewStyle(.page(indexDisplayMode: .never))
-
-                // One control, always in the same place. A flow that moves its
-                // own button around is harder to get through than one that does
-                // not, and this is the first thing anyone sees.
-                VStack(spacing: 12) {
-                    HStack(spacing: 6) {
-                        ForEach(0..<pages, id: \.self) { i in
-                            Capsule()
-                                .fill(i == page ? Theme.accent : Color.secondary.opacity(0.3))
-                                .frame(width: i == page ? 18 : 6, height: 6)
-                                .animation(.snappy, value: page)
-                        }
-                    }
-                    Button {
-                        if page < pages - 1 {
-                            withAnimation(.snappy) { page += 1 }
-                        } else {
-                            save()
-                            onDone()
-                        }
-                    } label: {
-                        Text(page < pages - 1 ? "متابعة" : "ابدأ استخدام Husk")
-                    }
-                    .buttonStyle(PrimaryButtonStyle())
-                    .padding(.horizontal, 28)
-                }
-                .padding(.bottom, 28)
+        VStack(spacing: 0) {
+            TabView(selection: $page) {
+                welcome.tag(0)
+                choices.tag(1)
+                ready.tag(2)
             }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .animation(.easeInOut(duration: 0.3), value: page)
+
+            VStack(spacing: 14) {
+                HStack(spacing: 7) {
+                    ForEach(0..<pages, id: \.self) { i in
+                        Circle()
+                            .fill(i == page ? Theme.text : Theme.textFaint)
+                            .frame(width: 7, height: 7)
+                    }
+                }
+                Button {
+                    if page < pages - 1 {
+                        withAnimation(.easeInOut(duration: 0.3)) { page += 1 }
+                    } else {
+                        save()
+                        onDone()
+                    }
+                } label: {
+                    Text(page < pages - 1 ? "متابعة" : "ابدأ")
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .padding(.horizontal, 24)
+            }
+            .padding(.top, 10)
+            .padding(.bottom, 24)
         }
+        .background(Theme.backdrop)
+        .interactiveDismissDisabled()
     }
 
     private func save() {
@@ -96,92 +93,113 @@ struct OnboardingView: View {
     // MARK: pages
 
     private var welcome: some View {
-        VStack(spacing: 20) {
-            Spacer()
-            if let art = HuskAppIcon.current.preview(dark: scheme == .dark) {
-                Image(uiImage: art)
-                    .resizable().scaledToFit()
-                    .frame(width: 112, height: 112)
-                    .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
-                    .shadow(color: Theme.accent.opacity(0.35), radius: 22, y: 10)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 34) {
+                VStack(alignment: .center, spacing: 18) {
+                    HuskMark(size: 96)
+                        .shadow(color: Theme.shadow, radius: 16, y: 8)
+                    Text("مرحبًا بك في\nIOS APP")
+                        .font(.system(size: 34, weight: .bold))
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(Theme.text)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 50)
+
+                VStack(alignment: .leading, spacing: 26) {
+                    feature("shippingbox.fill", .green, "تطبيقات أندرويد حقيقية",
+                            "ثبّت أي ملف APK وافتحه بملء الشاشة على آيفونك.")
+                    feature("bolt.fill", .orange, "سريع مع JIT",
+                            "يترجم المعالج كتلةً بكتلة، ويحفظ الجهاز ليعود خلال ثوانٍ.")
+                    feature("lock.shield.fill", .blue, "معزول وآمن",
+                            "أندرويد يعمل داخل التطبيق فقط، ولا يصل إلى ملفات آيفونك.")
+                }
+                .padding(.horizontal, 34)
             }
-            Text("Husk").font(.system(size: 40, weight: .semibold, design: .rounded))
-            Text("تطبيقات أندرويد، على آيفونك.")
-                .font(.title3).foregroundStyle(.secondary)
-            Text("يشغّل Husk نظام أندرويد حقيقيًا ويفتح ملفات APK داخله. "
-               + "بضع أسئلة أولًا — ويمكنك تغيير إجاباتها لاحقًا من الإعدادات.")
-                .font(.callout).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 34).padding(.top, 4)
-            Spacer()
+            .padding(.bottom, 20)
+        }
+    }
+
+    private func feature(_ icon: String, _ color: Color, _ title: String,
+                         _ detail: String) -> some View {
+        HStack(alignment: .top, spacing: 18) {
+            Image(systemName: icon)
+                .font(.system(size: 30))
+                .foregroundStyle(color)
+                .frame(width: 44)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Theme.text)
+                Text(detail).font(.system(size: 15))
+                    .foregroundStyle(Theme.textDim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
     private var choices: some View {
-        ScrollView {
-            VStack(spacing: 14) {
-                Text("كيف تريد أن يعمل Husk؟")
-                    .font(.title2.weight(.semibold))
-                    .padding(.top, 34).padding(.bottom, 6)
-
-                choice(icon: "bolt.fill", title: "تشغيل أندرويد عند الفتح",
-                       detail: "يُقلع نظام الضيف فور فتح Husk، عندما يكون JIT "
-                             + "متاحًا. إيقافه يعني أنك تشغّله بنفسك.",
-                       isOn: $autoStart)
-
-                choice(icon: "rectangle.landscape.rotate", title: "شاشة أفقية",
-                       detail: "يمنح أندرويد شاشة أفقية تملؤها الألعاب "
-                             + "جيدًا، وتظهر تطبيقات الوضع العمودي داخل إطار.",
-                       isOn: $landscape)
-
-                choice(icon: "speaker.wave.2.fill", title: "الصوت",
-                       detail: "يضيف جهاز صوت. لا يمكن حفظ أندرويد أثناء "
-                             + "تفعيله، لذا يبدأ كل تشغيل من الصفر.",
-                       isOn: $sound)
-
-                choice(icon: "externaldrive.badge.checkmark", title: "الحفظ التلقائي",
-                       detail: "يحفظ الجهاز بعد استقرار أندرويد، فتستعيده "
-                             + "التشغيلات التالية خلال ثوانٍ بدل الإقلاع من جديد.",
-                       isOn: $autoSave)
+        List {
+            Section {
+                VStack(spacing: 8) {
+                    Text("كيف تريد أن يعمل؟")
+                        .font(.system(size: 28, weight: .bold))
+                        .foregroundStyle(Theme.text)
+                    Text("يمكنك تغيير هذه الخيارات لاحقًا من الإعدادات.")
+                        .font(.system(size: 15))
+                        .foregroundStyle(Theme.textDim)
+                }
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 30)
+                .listRowBackground(Color.clear)
             }
-            .padding(.horizontal, 20).padding(.bottom, 20)
+            Section {
+                choice("bolt.fill", .orange, "تشغيل أندرويد عند الفتح",
+                       "يُقلع فور فتح التطبيق عندما يكون JIT متاحًا.", $autoStart)
+                choice("rectangle.landscape.rotate", .blue, "شاشة أفقية",
+                       "تناسب الألعاب، والتطبيقات العمودية تظهر داخل إطار.", $landscape)
+                choice("speaker.wave.2.fill", .pink, "الصوت",
+                       "لا يمكن حفظ أندرويد أثناء تفعيله.", $sound)
+                choice("externaldrive.fill.badge.checkmark", .green, "الحفظ التلقائي",
+                       "يستعيد الجهاز خلال ثوانٍ بدل الإقلاع من جديد.", $autoSave)
+            }
         }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
     }
 
-    private func choice(icon: String, title: String, detail: String,
-                        isOn: Binding<Bool>) -> some View {
-        HStack(alignment: .top, spacing: 14) {
-            Image(systemName: icon)
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(Theme.accent)
-                .frame(width: 30, height: 30)
-                .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: 9,
-                                                                   style: .continuous))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.body.weight(.medium))
-                Text(detail).font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+    private func choice(_ icon: String, _ color: Color, _ title: String,
+                        _ detail: String, _ isOn: Binding<Bool>) -> some View {
+        Toggle(isOn: isOn) {
+            HStack(spacing: 14) {
+                SettingsIcon(systemImage: icon, color: color)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).foregroundStyle(Theme.text)
+                    Text(detail).font(.system(size: 12)).foregroundStyle(Theme.textDim)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
-            Spacer(minLength: 8)
-            Toggle("", isOn: isOn).labelsHidden().tint(Theme.accent)
         }
-        .padding(16)
-        .huskCard()
+        .tint(Theme.good)
+        .padding(.vertical, 4)
     }
 
     private var ready: some View {
         VStack(spacing: 18) {
             Spacer()
-            Image(systemName: "checkmark.seal.fill")
-                .font(.system(size: 62))
-                .foregroundStyle(Theme.accent)
-            Text("جاهز").font(.largeTitle.weight(.semibold))
-            Text("يحتاج Husk إلى JIT لتشغيل أندرويد، ولا يمنحه في iOS إلا أداة "
-               + "تصحيح الأخطاء. إن لم يكن مفعّلًا، ستخبرك المكتبة بذلك وتعرض "
-               + "عليك فتح StikDebug.")
-                .font(.callout).foregroundStyle(.secondary)
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 76))
+                .foregroundStyle(Theme.good)
+                .symbolRenderingMode(.hierarchical)
+            Text("كل شيء جاهز")
+                .font(.system(size: 30, weight: .bold))
+                .foregroundStyle(Theme.text)
+            Text("يحتاج IOS APP إلى JIT لتشغيل أندرويد، ولا يمنحه في iOS إلا أداة "
+               + "تصحيح مثل StikDebug. إن لم يكن مفعّلًا ستخبرك المكتبة وتعرض فتحه.")
+                .font(.system(size: 15))
+                .foregroundStyle(Theme.textDim)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 34)
+                .padding(.horizontal, 36)
             Spacer()
         }
     }

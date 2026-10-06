@@ -73,8 +73,8 @@ extension TLReport {
         guard runsOnNativeRuntime else { return summary }
         let flagged = libraries.filter { $0.abi == "arm64-v8a" && $0.status != "ok" }.count
         let total = libraries.filter { $0.abi == "arm64-v8a" }.count
-        var text = "لعبة \(nativeEngineName). تعمل عبر بيئة التشغيل الأصلية في Husk، التي تحمّل مكتباتها الـ \(total) من نوع arm64 بنفسها."
-        if nativeEngine == .cocos || nativeEngine == .minecraft { text += " إنها لعبة أفقية: Husk يدير الشاشة لأجلها." }
+        var text = "لعبة \(nativeEngineName). تعمل عبر بيئة التشغيل الأصلية في IOS APP، التي تحمّل مكتباتها الـ \(total) من نوع arm64 بنفسها."
+        if nativeEngine == .cocos || nativeEngine == .minecraft { text += " إنها لعبة أفقية: IOS APP يدير الشاشة لأجلها." }
         if flagged > 0 {
             text += " \(flagged) منها تستخدم حيلًا لم يستطع المحمّل القديم التعامل معها؛ بيئة التشغيل الأصلية تتعامل معها أيضًا، "
                   + "باستثناء كود الحماية من العبث الاختياري، الذي تتجاوزه."
@@ -264,7 +264,7 @@ final class TranslationLayerStore: ObservableObject {
         } catch {
             try? fm.removeItem(at: dir)
             HuskLog.log("tl", "FAILED to add: \(error.localizedDescription)")
-            return "تعذّر على Husk نسخه: \(error.localizedDescription)"
+            return "تعذّر على IOS APP نسخه: \(error.localizedDescription)"
         }
 
         let apks = ((try? fm.contentsOfDirectory(atPath: dir.path)) ?? [])
@@ -426,7 +426,7 @@ struct TranslationLayerSettings: View {
         } header: {
             Text("التطبيقات")
         } footer: {
-            Text("يحتفظ Husk بنسخته الخاصة، منفصلة عن نسخة أندرويد. اختر ملف APK الأساسي "
+            Text("يحتفظ IOS APP بنسخته الخاصة، منفصلة عن نسخة أندرويد. اختر ملف APK الأساسي "
                + "وقطعه المنقسمة معًا لإضافتها كتطبيق واحد.")
         }
     }
@@ -475,7 +475,7 @@ struct TranslationLayerSettings: View {
         } header: {
             Text("أين وصلنا")
         } footer: {
-            Text("الخطة بالترتيب موجودة في docs/04-translation-layer.md ضمن سورس Husk.")
+            Text("الخطة بالترتيب موجودة في docs/04-translation-layer.md ضمن سورس IOS APP.")
         }
     }
 }
@@ -591,7 +591,7 @@ struct TLAppReportView: View {
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(Theme.accent)
                         Spacer()
-                        Image(systemName: "chevron.right")
+                        Image(systemName: "chevron.forward")
                             .font(.caption.bold())
                             .foregroundStyle(Theme.textDim.opacity(0.5))
                     }
@@ -645,7 +645,7 @@ struct TLAppReportView: View {
                     Label("إزالة", systemImage: "trash")
                 }
             } footer: {
-                Text("يحذف نسخة Husk من ملفات APK. أي شيء مثبت في أندرويد لا يُمس.")
+                Text("يحذف نسخة IOS APP من ملفات APK. أي شيء مثبت في أندرويد لا يُمس.")
             }
         }
         .huskForm()
@@ -666,6 +666,7 @@ struct TLAppReportView: View {
         .fullScreenCover(isPresented: Binding(get: { showAttempt && app.report?.runsOnNativeRuntime == true },
                                               set: { showAttempt = $0 })) {
             TLAttemptView(app: app)
+                .statusBarHidden(true)
         }
     }
 
@@ -927,7 +928,7 @@ struct TLClassicAttemptView: View {
                         withAnimation(.snappy(duration: 0.25)) { showLog.toggle() }
                     } label: {
                         HStack(spacing: 6) {
-                            Image(systemName: showLog ? "chevron.down" : "chevron.right")
+                            Image(systemName: showLog ? "chevron.down" : "chevron.forward")
                                 .font(.system(size: 11, weight: .bold))
                                 .frame(width: 12)
                             Text("سجلّ المحاولة")

@@ -21,13 +21,13 @@ struct FilesTab: View {
                 .navigationDestination(for: String.self) { path in
                     DirectoryView(path: path,
                                   title: (path as NSString).lastPathComponent)
-                        .toolbar(.hidden, for: .tabBar)
                 }
         }
     }
 }
 
-/// One directory.
+/// One directory — مصمم من الصفر بأسلوب تطبيق الملفات في آيفون: قائمة مجمّعة
+/// أصلية، شريط التخزين في الأعلى، وسحب للتحديث.
 struct DirectoryView: View {
     let path: String
     let title: String
@@ -40,17 +40,70 @@ struct DirectoryView: View {
     @State private var importing = false
     @State private var showImportSheet = false
     @State private var installing: AndroidHost.GuestEntry?
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        ZStack {
-            Theme.backdrop
-            content
+        List {
+            if path != FilesTab.root {
+                Section {
+                    Label(path, systemImage: "folder")
+                        .font(.technical(12))
+                        .foregroundStyle(Theme.textDim)
+                        .lineLimit(1).truncationMode(.head)
+                }
+            }
+            if let space {
+                Section { storage(space) }
+            }
+            if loading && entries.isEmpty {
+                Section {
+                    HStack { Spacer(); ProgressView(); Spacer() }
+                        .padding(.vertical, 30)
+                        .listRowBackground(Color.clear)
+                }
+            } else if let failure {
+                Section {
+                    EmptyState(title: "تعذّر قراءة هذا المجلد",
+                               message: failure, systemImage: "lock.fill")
+                        .listRowBackground(Color.clear)
+                }
+            } else if entries.isEmpty {
+                Section {
+                    EmptyState(title: "المجلد فارغ",
+                               message: "لا يوجد شيء هنا بعد.",
+                               systemImage: "folder",
+                               actionTitle: "استيراد ملفات",
+                               action: { showImportSheet = true })
+                        .listRowBackground(Color.clear)
+                }
+            } else {
+                Section {
+                    ForEach(entries, id: \.id) { e in row(e) }
+                } header: {
+                    Text("\(entries.count) عنصر")
+                }
+            }
         }
-        .navigationBarHidden(true)
+        .listStyle(.insetGrouped)
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(path == FilesTab.root ? .large : .inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button { showImportSheet = true } label: {
+                    Image(systemName: "plus.circle.fill")
+                        .symbolRenderingMode(.hierarchical)
+                        .font(.system(size: 20))
+                }
+                .accessibilityLabel("استيراد")
+            }
+        }
         .sheet(isPresented: $showImportSheet) {
-            ImportSheet(destination: path) { showImportSheet = false; importing = true }
-                .presentationDetents([.height(320)])
+            ImportSheet(destination: path) {
+                showImportSheet = false
+                // فتح منتقي الملفات أثناء إغلاق الورقة كان يفشل أحيانًا؛ ننتظر
+                // انتهاء حركة الإغلاق أولًا.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { importing = true }
+            }
+            .presentationDetents([.height(340)])
         }
         .huskFilePicker(isPresented: $importing) { urls in
             host.sendFiles(urls, to: path)
@@ -71,95 +124,81 @@ struct DirectoryView: View {
         .refreshable { load() }
     }
 
-    @ViewBuilder private var content: some View {
-        ScrollView {
-            VStack(spacing: 14) {
-                HuskHeader(back: path == FilesTab.root ? nil : { dismiss() },
-                           title: title) {
-                    HStack(spacing: 10) {
-                        CircleButton(systemImage: "arrow.clockwise") { load() }
-                        CircleButton(systemImage: "plus") { showImportSheet = true }
-                    }
-                }
-
-                if path != FilesTab.root {
-                    Text(path)
-                        .font(.technical(11))
-                        .foregroundStyle(Theme.textDim)
-                        .lineLimit(1).truncationMode(.head)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                if let space { storage(space) }
-
-                if loading && entries.isEmpty {
-                    ProgressView().tint(Theme.accent).padding(.top, 60)
-                } else if let failure {
-                    EmptyState(title: "تعذّر قراءة هذا المجلد",
-                               message: failure, systemImage: "lock")
-                } else if entries.isEmpty {
-                    EmptyState(title: "فارغ",
-                               message: "لا يوجد شيء في هذا المجلد بعد.",
-                               systemImage: "folder",
-                               actionTitle: "استيراد ملفات",
-                               action: { showImportSheet = true })
-                } else {
-                    RowGroup {
-                        ForEach(Array(entries.enumerated()), id: \.element.id) { i, e in
-                            row(e)
-                            if i < entries.count - 1 { RowDivider() }
-                        }
-                    }
-                }
-            }
-            .padding(.horizontal, 18)
-            .padding(.top, 6)
-            .padding(.bottom, 28)
-        }
-    }
-
     @ViewBuilder private func row(_ e: AndroidHost.GuestEntry) -> some View {
         if e.isDirectory {
             NavigationLink(value: e.path) {
-                HuskRow(systemImage: "folder.fill", title: e.name,
-                        subtitle: e.modified.map(Self.when))
+                fileLabel(icon: "folder.fill", color: .blue, name: e.name,
+                          detail: e.modified.map(Self.when))
             }
-            .buttonStyle(.plain)
         } else {
+            let isAPK = e.name.lowercased().hasSuffix(".apk")
             Button {
-                if e.name.lowercased().hasSuffix(".apk") { installing = e }
+                if isAPK { installing = e }
             } label: {
-                HuskRow(systemImage: icon(for: e.name), title: e.name,
-                        subtitle: subtitle(e),
-                        showsChevron: e.name.lowercased().hasSuffix(".apk"))
+                HStack {
+                    fileLabel(icon: icon(for: e.name), color: color(for: e.name),
+                              name: e.name, detail: subtitle(e))
+                    if isAPK {
+                        Spacer()
+                        Text("تثبيت").font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Theme.accent)
+                    }
+                }
             }
             .buttonStyle(.plain)
         }
     }
 
+    private func fileLabel(icon: String, color: Color, name: String, detail: String?) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 24))
+                .foregroundStyle(color)
+                .frame(width: 34)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name).font(.system(size: 16)).foregroundStyle(Theme.text).lineLimit(1)
+                if let detail {
+                    Text(detail).font(.system(size: 12)).foregroundStyle(Theme.textDim)
+                }
+            }
+        }
+        .contentShape(Rectangle())
+    }
+
+    private func color(for name: String) -> Color {
+        let n = name.lowercased()
+        if n.hasSuffix(".apk") { return .green }
+        if n.hasSuffix(".png") || n.hasSuffix(".jpg") || n.hasSuffix(".jpeg") || n.hasSuffix(".webp") { return .orange }
+        if n.hasSuffix(".mp4") || n.hasSuffix(".mkv") { return .purple }
+        if n.hasSuffix(".mp3") || n.hasSuffix(".ogg") || n.hasSuffix(".wav") { return .pink }
+        return .gray
+    }
+
     private func storage(_ s: (free: Int64, total: Int64)) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("التخزين")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(Theme.text)
                 Spacer()
                 Text("\(AppDetailView.bytes(s.total - s.free)) من "
                    + "\(AppDetailView.bytes(s.total))")
-                    .font(.system(size: 12))
+                    .font(.system(size: 13))
                     .foregroundStyle(Theme.textDim)
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule().fill(Theme.surfaceHigh)
-                    Capsule().fill(Theme.accent)
+                    Capsule().fill(LinearGradient(colors: [.blue, .indigo],
+                                                  startPoint: .leading, endPoint: .trailing))
                         .frame(width: geo.size.width * used(s))
                 }
             }
-            .frame(height: 5)
+            .frame(height: 8)
+            Text("متاح \(AppDetailView.bytes(s.free))")
+                .font(.system(size: 12)).foregroundStyle(Theme.textDim)
         }
-        .padding(.horizontal, 14).padding(.vertical, 13)
-        .huskCard(RoundedRectangle(cornerRadius: Theme.rowCorner, style: .continuous))
+        .padding(.vertical, 6)
     }
 
     private func used(_ s: (free: Int64, total: Int64)) -> CGFloat {
@@ -215,7 +254,7 @@ struct DirectoryView: View {
     }
 }
 
-/// The import screen from the concept: one target, one button.
+/// ورقة الاستيراد: هدف واحد وزر واحد.
 struct ImportSheet: View {
     let destination: String
     let onBrowse: () -> Void
@@ -223,50 +262,44 @@ struct ImportSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        ZStack {
-            Theme.backdrop
-            VStack(spacing: 18) {
-                HStack {
-                    Spacer()
-                    Button { dismiss() } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 13, weight: .semibold))
+        NavigationStack {
+            VStack(spacing: 20) {
+                Button(action: onBrowse) {
+                    VStack(spacing: 12) {
+                        Image(systemName: "square.and.arrow.down.on.square.fill")
+                            .font(.system(size: 40))
+                            .foregroundStyle(Theme.accent)
+                            .symbolRenderingMode(.hierarchical)
+                        Text("اختر ملفات من الآيفون")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(Theme.text)
+                        Text("تُنسخ إلى \((destination as NSString).lastPathComponent). "
+                           + "ملفات APK تُثبَّت من هنا أيضًا.")
+                            .font(.system(size: 13))
                             .foregroundStyle(Theme.textDim)
-                            .frame(width: 30, height: 30)
-                            .background(Theme.surfaceHigh, in: Circle())
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 20)
                     }
-                    .buttonStyle(.plain)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 26)
+                    .huskCard()
                 }
+                .buttonStyle(CardButtonStyle())
 
-                VStack(spacing: 10) {
-                    Image(systemName: "doc.badge.plus")
-                        .font(.system(size: 30, weight: .light))
-                        .foregroundStyle(Theme.textDim)
-                    Text("اضغط للاستيراد")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(Theme.text)
-                    Text("يُستورد إلى \((destination as NSString).lastPathComponent). "
-                       + "ملفات APK غير المعدّلة تُثبَّت من هنا أيضًا.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.textDim)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 20)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 30)
-                .background(
-                    RoundedRectangle(cornerRadius: Theme.cardCorner, style: .continuous)
-                        .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [6, 5]))
-                        .foregroundStyle(Theme.hairline))
-                .contentShape(Rectangle())
-                .onTapGesture { onBrowse() }
-
-                Button("تصفح الملفات", action: onBrowse)
+                Button("تصفّح الملفات", action: onBrowse)
                     .buttonStyle(PrimaryButtonStyle())
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 20)
-            .padding(.top, 14)
+            .padding(.top, 8)
+            .background(Theme.backdrop)
+            .navigationTitle("استيراد")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("إلغاء") { dismiss() }
+                }
+            }
         }
     }
 }

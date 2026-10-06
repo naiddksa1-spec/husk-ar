@@ -11,99 +11,69 @@ import SwiftUI
 struct SettingsTab: View {
     @ObservedObject private var runner = QemuRunner.shared
     @ObservedObject private var host = AndroidHost.shared
-    @State private var searching = false
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                Theme.backdrop
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 22) {
-                        HuskHeader(mark: true, title: "الإعدادات")
-
-                        group("عام") {
-                            link(LibrarySettings(), "square.grid.2x2", "المكتبة",
-                                 "تطبيقاتك وأيقوناتها")
-                            RowDivider()
-                            link(PerformanceSettings(), "speedometer", "الأداء",
-                                 "المعالج الرسومي، الصوت")
-                            RowDivider()
-                            link(AppearanceSettings(), "paintbrush", "المظهر",
-                                 "فاتح أو داكن، أيقونة التطبيق")
-                        }
-
-                        group("المحاكي") {
-                            link(JITSettings(), "bolt.circle", "JIT والتثبيت اليدوي",
-                                 "ذاكرة التنفيذ، بدء التشغيل")
-                            RowDivider()
-                            link(InputSettings(), "hand.tap", "الإدخال",
-                                 "الشاشة، اللمس، لوحة المفاتيح")
-                            RowDivider()
-                            link(NetworkSettings(), "globe", "الشبكة",
-                                 "الإنترنت والجلسات المحفوظة")
-                            RowDivider()
-                            link(SavedMachineSettings(), "externaldrive",
-                                 "الجهاز المحفوظ", "اللقطات والحفظ التلقائي")
-                        }
-
-                        group("تجريبي") {
-                            link(TranslationLayerSettings(), "testtube.2",
-                                 "Android Translation Layer",
-                                 "تطبيقات بدون تشغيل أندرويد")
-                        }
-
-                        group("حول") {
-                            NavigationLink { AboutSettings() } label: {
-                                HStack(spacing: 14) {
-                                    HuskMark(size: 34)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Husk")
-                                            .font(.system(size: 15, weight: .medium))
-                                            .foregroundStyle(Theme.text)
-                                        Text("الإصدار \(Bundle.main.version) "
-                                           + "· \(Bundle.main.commit)")
-                                            .font(.system(size: 12))
-                                            .foregroundStyle(Theme.textDim)
-                                    }
-                                    Spacer(minLength: 8)
-                                    Image(systemName: "chevron.right")
-                                        .font(.system(size: 13, weight: .semibold))
-                                        .foregroundStyle(Theme.textDim.opacity(0.7))
-                                }
-                                .padding(.horizontal, 14).padding(.vertical, 12)
-                                .contentShape(Rectangle())
+            List {
+                // بطاقة التطبيق في الأعلى، مثل خانة Apple ID في إعدادات آيفون.
+                Section {
+                    NavigationLink { AboutSettings() } label: {
+                        HStack(spacing: 14) {
+                            HuskMark(size: 58)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("IOS APP")
+                                    .font(.system(size: 20, weight: .semibold))
+                                    .foregroundStyle(Theme.text)
+                                Text("الإصدار \(Bundle.main.version) · \(statusLine)")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(Theme.textDim)
+                                    .lineLimit(1)
                             }
-                            .buttonStyle(.plain)
                         }
+                        .padding(.vertical, 6)
                     }
-                    .padding(.horizontal, 18)
-                    .padding(.top, 6)
-                    .padding(.bottom, 28)
+                }
+
+                Section("عام") {
+                    link(LibrarySettings(), "square.grid.2x2.fill", .blue, "المكتبة")
+                    link(PerformanceSettings(), "speedometer", .red, "الأداء")
+                    link(AppearanceSettings(), "paintbrush.fill", .indigo, "المظهر والأيقونة")
+                }
+
+                Section("المحاكي") {
+                    link(JITSettings(), "bolt.fill", .orange, "JIT والتشغيل")
+                    link(InputSettings(), "hand.tap.fill", .pink, "الإدخال")
+                    link(NetworkSettings(), "network", .teal, "الشبكة")
+                    link(SavedMachineSettings(), "externaldrive.fill", .gray, "الجهاز المحفوظ")
+                }
+
+                Section {
+                    link(TranslationLayerSettings(), "testtube.2", .purple,
+                         "Android Translation Layer")
+                } header: {
+                    Text("تجريبي")
+                } footer: {
+                    Text("تشغيل بعض الألعاب مباشرة بدون إقلاع أندرويد كامل.")
                 }
             }
-            .navigationBarHidden(true)
-            .toolbar(.hidden, for: .tabBar)
+            .listStyle(.insetGrouped)
+            .navigationTitle("الإعدادات")
+            .navigationBarTitleDisplayMode(.large)
         }
     }
 
-    @ViewBuilder
-    private func group<Content: View>(_ title: String,
-                                      @ViewBuilder rows: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Theme.textDim)
-                .padding(.leading, 4)
-            RowGroup { rows() }
-        }
+    private var statusLine: String {
+        host.isReady ? "أندرويد يعمل" : runner.isRunning ? "جارٍ التشغيل" : "متوقف"
     }
 
-    private func link<D: View>(_ destination: D, _ icon: String,
-                               _ title: String, _ subtitle: String) -> some View {
+    private func link<D: View>(_ destination: D, _ icon: String, _ color: Color,
+                               _ title: String) -> some View {
         NavigationLink { destination } label: {
-            HuskRow(systemImage: icon, title: title, subtitle: subtitle)
+            HStack(spacing: 14) {
+                SettingsIcon(systemImage: icon, color: color)
+                Text(title).foregroundStyle(Theme.text)
+            }
         }
-        .buttonStyle(.plain)
     }
 }
 
@@ -160,7 +130,7 @@ struct LibrarySettings: View {
                 .disabled(working || !host.isReady)
             } footer: {
                 Text("الأسماء والأيقونات من مشغّل أندرويد نفسه، الذي يحتفظ بالنسخة "
-                   + "التي يرسمها. إعادة الجلب تتخلص من نسخ Husk وتطلب من جديد.")
+                   + "التي يرسمها. إعادة الجلب تتخلص من نسخ IOS APP وتطلب من جديد.")
             }
         }
         .huskForm()
@@ -473,11 +443,11 @@ struct JITSettings: View {
             } header: {
                 Text("JIT")
             } footer: {
-                Text("يحتاج Husk إلى ذاكرة يكتب فيها ثم ينفّذها، وهذا على iOS "
+                Text("يحتاج IOS APP إلى ذاكرة يكتب فيها ثم ينفّذها، وهذا على iOS "
                    + "يتطلب مصححًا متصلًا. هناك طريقتان للحصول عليه: مصحح يلبّي "
                    + "طلبات المصائد، أو تعيين MAP_JIT الذي تسمح به النواة لأي "
                    + "عملية مصحَّحة. أيٌّ منهما يكفي — والمتاح منهما يعتمد على "
-                   + "الجهاز وإصدار iOS، لذا يختبر Husk الاثنين بدل الافتراض.")
+                   + "الجهاز وإصدار iOS، لذا يختبر IOS APP الاثنين بدل الافتراض.")
             }
 
             Section {
@@ -486,14 +456,14 @@ struct JITSettings: View {
                         UserDefaults.standard.set(v, forKey: "husk.autoStart")
                     }
             } footer: {
-                Text("يقلع الضيف فور فتح Husk عندما يكون JIT متاحًا.")
+                Text("يقلع الضيف فور فتح IOS APP عندما يكون JIT متاحًا.")
             }
 
             Section {
                 Toggle("إبقاء المصحح متصلًا", isOn: $keepAttached)
                     .onChange(of: keepAttached) { v in JITBootstrap.keepDebuggerAttached = v }
             } footer: {
-                Text("مطفأ افتراضيًا. يفصل Husk عن StikDebug فور امتلاك منطقة "
+                Text("مطفأ افتراضيًا. يفصل IOS APP عن StikDebug فور امتلاك منطقة "
                    + "JIT، لأن مصححًا علّقه iOS يوقف التطبيق كله في المرة التالية "
                    + "التي يُحتاج فيها. فعّله فقط لجمع سجلات StikDebug الخاصة.")
             }
@@ -539,7 +509,7 @@ struct SavedMachineSettings: View {
                 }
                 .disabled(runner.isSavingState)
             } footer: {
-                Text("يستعيد Husk جهازًا محفوظًا بدل إقلاعه، فيستغرق ثوانٍ بدل "
+                Text("يستعيد IOS APP جهازًا محفوظًا بدل إقلاعه، فيستغرق ثوانٍ بدل "
                    + "دقائق. تتجمد الصورة أثناء الكتابة. ومع إيقافه لا يُحفظ شيء "
                    + "تلقائيًا — حتى بعد التثبيت.")
             }
@@ -596,35 +566,45 @@ struct SavedMachineSettings: View {
 
 struct AppearanceSettings: View {
     @State private var appIcon = HuskAppIcon.current
-    @AppStorage(Theme.Appearance.key) private var appearance = Theme.Appearance.dark
+    @AppStorage(Theme.Appearance.key) private var appearance = Theme.Appearance.system
     @Environment(\.colorScheme) private var scheme
 
-    private let columns = [GridItem(.adaptive(minimum: 92), spacing: 14)]
+    private let columns = [GridItem(.adaptive(minimum: 84), spacing: 16)]
 
     var body: some View {
-        ZStack {
-            Theme.backdrop
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    Picker("المظهر", selection: $appearance) {
-                        ForEach(Theme.Appearance.allCases) { Text($0.title).tag($0) }
+        List {
+            Section {
+                HStack(spacing: 0) {
+                    ForEach(Theme.Appearance.allCases) { option in
+                        Button {
+                            appearance = option
+                            HuskLog.log("ui", "appearance: \(option.rawValue)")
+                        } label: {
+                            VStack(spacing: 10) {
+                                preview(option)
+                                Text(option.title)
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(Theme.text)
+                                Image(systemName: appearance == option
+                                      ? "checkmark.circle.fill" : "circle")
+                                    .font(.system(size: 20))
+                                    .foregroundStyle(appearance == option ? Theme.accent
+                                                                          : Theme.textFaint)
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .pickerStyle(.segmented)
-                    .onChange(of: appearance) { v in
-                        HuskLog.log("ui", "appearance: \(v.rawValue)")
-                    }
-                    Text("النظام يتبع الهاتف. شاشة الضيف تبقى داكنة في الحالتين "
-                       + "— فهي صورة لهاتف آخر.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.textDim)
-                        .padding(.horizontal, 4)
                 }
-                .padding(.horizontal, 18).padding(.top, 12)
+                .padding(.vertical, 10)
+            } header: {
+                Text("المظهر")
+            } footer: {
+                Text("تلقائي يتبع إعداد الآيفون. شاشة أندرويد تبقى داكنة دائمًا.")
+            }
 
-                SectionHeader(title: "أيقونة التطبيق")
-                    .padding(.horizontal, 22).padding(.top, 14)
-
-                LazyVGrid(columns: columns, spacing: 14) {
+            Section {
+                LazyVGrid(columns: columns, spacing: 16) {
                     ForEach(HuskAppIcon.allCases) { icon in
                         Button {
                             appIcon = icon
@@ -634,46 +614,75 @@ struct AppearanceSettings: View {
                                 if let art = icon.preview(dark: scheme == .dark) {
                                     Image(uiImage: art)
                                         .resizable().scaledToFit()
-                                        .frame(width: 60, height: 60)
-                                        .clipShape(RoundedRectangle(cornerRadius: 14,
+                                        .frame(width: 64, height: 64)
+                                        .clipShape(RoundedRectangle(cornerRadius: 64 * 0.2237,
                                                                     style: .continuous))
+                                        .overlay(RoundedRectangle(cornerRadius: 64 * 0.2237 + 4,
+                                                                  style: .continuous)
+                                                    .stroke(appIcon == icon ? Theme.accent : .clear,
+                                                            lineWidth: 3)
+                                                    .padding(-4))
                                 }
                                 Text(icon.title)
                                     .font(.system(size: 12))
-                                    .foregroundStyle(Theme.text)
+                                    .foregroundStyle(appIcon == icon ? Theme.accent : Theme.text)
                                     .lineLimit(1)
                             }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
-                            // The selected icon is ringed in the accent rather
-                            // than filled with it: the artwork is the subject
-                            // here, and a tinted panel behind it changes how
-                            // the thing you are choosing looks.
-                            .background(Theme.surface,
-                                        in: RoundedRectangle(cornerRadius: Theme.cardCorner,
-                                                             style: .continuous))
-                            .overlay(RoundedRectangle(cornerRadius: Theme.cardCorner,
-                                                      style: .continuous)
-                                        .stroke(appIcon == icon ? Theme.accent
-                                                                : Theme.hairline,
-                                                lineWidth: appIcon == icon ? 2 : 0.5))
+                            .padding(.vertical, 6)
                         }
                         .buttonStyle(CardButtonStyle())
                     }
                 }
-                .padding(.horizontal, 18).padding(.top, 8)
-
-                Text("التلقائي يتبع مظهر النظام — فاتح وداكن وملوّن. البقية تثبّت "
-                   + "مظهرًا واحدًا. يعرض iOS تأكيده الخاص بعد التغيير؛ ولا يمكن "
-                   + "إيقاف ذلك التنبيه.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.textDim)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 28).padding(.vertical, 18)
+                .padding(.vertical, 8)
+            } header: {
+                Text("أيقونة التطبيق")
+            } footer: {
+                Text("يعرض iOS تأكيده الخاص بعد تغيير الأيقونة.")
             }
         }
-        .navigationTitle("المظهر")
+        .listStyle(.insetGrouped)
+        .navigationTitle("المظهر والأيقونة")
         .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: appearance) { Theme.apply($0) }
+    }
+
+    /// معاينة مصغّرة لشكل الشاشة بكل مظهر، كما في إعدادات العرض في آيفون.
+    private func preview(_ option: Theme.Appearance) -> some View {
+        let light = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        return ZStack {
+            switch option {
+            case .light: miniScreen(dark: false)
+            case .dark: miniScreen(dark: true)
+            case .system:
+                ZStack {
+                    miniScreen(dark: false)
+                    miniScreen(dark: true)
+                        .mask(HStack(spacing: 0) { Color.clear; Color.black })
+                }
+            }
+        }
+        .frame(width: 56, height: 100)
+        .clipShape(light)
+        .overlay(light.stroke(Theme.hairline, lineWidth: 0.5))
+    }
+
+    private func miniScreen(dark: Bool) -> some View {
+        let page = dark ? Color.black : Color(white: 0.95)
+        let card = dark ? Color(white: 0.17) : Color.white
+        return ZStack(alignment: .top) {
+            page
+            VStack(spacing: 5) {
+                RoundedRectangle(cornerRadius: 2).fill(card).frame(height: 12)
+                RoundedRectangle(cornerRadius: 2).fill(card).frame(height: 22)
+                HStack(spacing: 4) {
+                    ForEach(0..<3, id: \.self) { _ in
+                        RoundedRectangle(cornerRadius: 3).fill(Color.blue.opacity(0.8))
+                            .frame(width: 10, height: 10)
+                    }
+                }
+            }
+            .padding(6).padding(.top, 8)
+        }
     }
 }
 
@@ -685,65 +694,53 @@ struct AboutSettings: View {
     @AppStorage(TranslationLayer.devInfoKey) private var devInfo = false
 
     var body: some View {
-        ZStack {
-            Theme.backdrop
-            ScrollView {
-                VStack(spacing: 18) {
-                    VStack(spacing: 10) {
-                        HuskMark(size: 76)
-                        Text("Husk")
-                            .font(.system(size: 22, weight: .semibold))
-                            .foregroundStyle(Theme.text)
-                        Text("الإصدار \(Bundle.main.version)")
-                            .font(.system(size: 13))
-                            .foregroundStyle(Theme.textDim)
-                    }
-                    .padding(.top, 10)
-
-                    RowGroup {
-                        VStack(spacing: 12) {
-                            DetailRow(label: "البناء", value: Bundle.main.commit)
-                            DetailRow(label: "صورة الضيف", value: GuestImage.imageVersion)
-                            DetailRow(label: "المعالج الرسومي",
-                                      value: runner.displayKind == .gl ? "GPU"
-                                           : runner.displayKind == .software ? "CPU"
-                                           : "لم يبدأ")
-                        }
-                        .padding(14)
-                    }
-
-                    RowGroup {
-                        Toggle(isOn: $devInfo) {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("معلومات المطوّر")
-                                    .font(.system(size: 15, weight: .medium))
-                                    .foregroundStyle(Theme.text)
-                                Text("تفاصيل تقنية في شاشات Android Translation Layer: "
-                                   + "تقارير المكتبات وفحوصات الجهاز وسجلات التشغيل.")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(Theme.textDim)
-                            }
-                        }
-                        .padding(14)
-                    }
-
-                    Button { showLogs = true } label: {
-                        Label("فتح السجل", systemImage: "terminal")
-                    }
-                    .buttonStyle(PrimaryButtonStyle())
-
-                    Text("يشغّل Husk ملفات APK الأصلية دون تعديل في نظام أندرويد "
-                       + "حقيقي على آيفونك. يعرض السجل سجل Husk المباشر ومخرجات "
-                       + "الضيف التسلسلية ومخرجات QEMU — وهي الملفات الثلاثة التي "
-                       + "تُشخَّص منها أي مشكلة.")
-                        .font(.system(size: 12))
+        List {
+            Section {
+                VStack(spacing: 10) {
+                    HuskMark(size: 92)
+                        .shadow(color: Theme.shadow, radius: 12, y: 6)
+                    Text("IOS APP")
+                        .font(.system(size: 24, weight: .bold))
+                        .foregroundStyle(Theme.text)
+                    Text("تطبيقات أندرويد، على آيفونك.")
+                        .font(.system(size: 14))
                         .foregroundStyle(Theme.textDim)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 14)
                 }
-                .padding(.horizontal, 18).padding(.vertical, 14)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .listRowBackground(Color.clear)
+            }
+
+            Section("المعلومات") {
+                DetailRow(label: "الإصدار", value: Bundle.main.version)
+                DetailRow(label: "البناء", value: Bundle.main.commit)
+                DetailRow(label: "صورة الضيف", value: GuestImage.imageVersion)
+                DetailRow(label: "المعالج الرسومي",
+                          value: runner.displayKind == .gl ? "GPU"
+                               : runner.displayKind == .software ? "CPU" : "لم يبدأ",
+                          mono: false)
+            }
+
+            Section {
+                Toggle(isOn: $devInfo) {
+                    HStack(spacing: 14) {
+                        SettingsIcon(systemImage: "hammer.fill", color: .gray)
+                        Text("معلومات المطوّر")
+                    }
+                }
+                .tint(Theme.good)
+                Button { showLogs = true } label: {
+                    HStack(spacing: 14) {
+                        SettingsIcon(systemImage: "terminal.fill", color: .black)
+                        Text("فتح السجل").foregroundStyle(Theme.text)
+                    }
+                }
+            } footer: {
+                Text("يعرض السجل سجل IOS APP المباشر ومخرجات الضيف ومخرجات QEMU — "
+                   + "وهي الملفات التي تُشخَّص منها أي مشكلة.")
             }
         }
+        .listStyle(.insetGrouped)
         .navigationTitle("حول")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showLogs) { LogView() }

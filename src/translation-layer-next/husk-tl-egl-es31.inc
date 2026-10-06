@@ -35,7 +35,11 @@ static bool es31_ident(int c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c 
 /* The 300 es text of a 310 es shader (malloc'd), with the bindings it dropped in rec[0..*nrec). Anything else is returned as it came. */
 static char *es31_downgrade(const char *src, size_t n, es31_bind *rec, int *nrec)
 {
-    char *out = malloc(n + 4096); size_t o = 0;
+    /* Security: every "[]" inside a rewritten storage block grows to "[1024]" (3x), so n + 4096 could be overrun
+     * by a hostile shader shipped in an APK. 3n plus slack is a hard upper bound for every rewrite below. */
+    if (n > (SIZE_MAX - 8192) / 3) return NULL;
+    char *out = malloc(n * 3 + 8192); size_t o = 0;
+    if (!out) return NULL;
     *nrec = 0;
     const char *ver = strstr(src, "#version 310 es");
     if (!ver) { memcpy(out, src, n); out[n] = 0; return out; }
@@ -112,10 +116,12 @@ static void w_glShaderSource(unsigned sh, int count, const char *const *str, con
     size_t total = 0;
     for (int i = 0; i < count; i++) total += str[i] ? (len && len[i] >= 0 ? (size_t)len[i] : strlen(str[i])) : 0;
     char *cat = malloc(total + 1); size_t k = 0;
+    if (!cat) { r_glShaderSource(sh, count, str, len); return; }
     for (int i = 0; i < count; i++) if (str[i]) { size_t l = len && len[i] >= 0 ? (size_t)len[i] : strlen(str[i]); memcpy(cat + k, str[i], l); k += l; }
     cat[k] = 0;
     es31_bind rec[ES31_BINDS]; int nrec = 0;
     char *down = es31_downgrade(cat, k, rec, &nrec);
+    if (!down) { free(cat); r_glShaderSource(sh, count, str, len); return; }
     pthread_mutex_lock(&g_es31_mu);
     int slot = (int)(sh % ES31_SHADERS);
     g_es31_sh[slot].shader = sh; g_es31_sh[slot].n = nrec; memcpy(g_es31_sh[slot].b, rec, sizeof(es31_bind) * (size_t)nrec);

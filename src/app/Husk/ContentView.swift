@@ -25,7 +25,7 @@ struct ContentView: View {
     /// True while the launch boot screen is up, rather than the library.
     @State private var booting = false
     @Environment(\.scenePhase) private var scenePhase
-    @AppStorage(Theme.Appearance.key) private var appearance = Theme.Appearance.dark
+    @AppStorage(Theme.Appearance.key) private var appearance = Theme.Appearance.system
 
     var body: some View {
         ZStack {
@@ -40,13 +40,13 @@ struct ContentView: View {
             // why it appears instantly rather than reloading.
             TabView(selection: $router.tab) {
                 DiscoverTab()
-                    .tabItem { Label("اكتشف", systemImage: "sparkle.magnifyingglass") }
+                    .tabItem { Label("اكتشف", systemImage: "safari.fill") }
                     .tag(HuskTab.discover)
 
                 LibraryTab(onOpenGuest: { showGuestScreen = true },
                            onStartAndroid: startFromLibrary,
                            started: started && runner.isRunning)
-                    .tabItem { Label("المكتبة", systemImage: "square.grid.2x2.fill") }
+                    .tabItem { Label("التطبيقات", systemImage: "square.stack.3d.up.fill") }
                     .tag(HuskTab.library)
 
                 FilesTab()
@@ -64,12 +64,13 @@ struct ContentView: View {
             // appears on is a message in the way.
             if let toast = host.toast {
                 VStack {
+                    ToastView(toast: toast) { withAnimation { host.toast = nil } }
+                        .padding(.horizontal, 14)
+                        .padding(.top, 6)
+                        .transition(.move(edge: .top).combined(with: .opacity))
                     Spacer()
-                    ToastView(toast: toast) { host.toast = nil }
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 8)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
+                .zIndex(5)
                 .task(id: toast.id) {
                     try? await Task.sleep(nanoseconds: 4_500_000_000)
                     withAnimation(.snappy) {
@@ -105,10 +106,15 @@ struct ContentView: View {
             }
         }
         .tint(Theme.accent)
+        // شريط الحالة ظاهر في واجهة التطبيق كما في أي تطبيق آيفون، ومخفي فوق أندرويد فقط.
+        .statusBarHidden(showGuestScreen && started && runner.isRunning)
         // The user's appearance, dark unless they chose otherwise. Set on the
         // window rather than with .preferredColorScheme — see Theme.apply.
         .onAppear { Theme.apply(appearance) }
         .onChange(of: appearance) { Theme.apply($0) }
+        .onChange(of: router.guestRequests) { _ in
+            if started && runner.isRunning { showGuestScreen = true }
+        }
         .animation(.snappy(duration: 0.22), value: showGuestScreen)
         .animation(.snappy(duration: 0.25), value: host.toast)
         .fullScreenCover(isPresented: $showOnboarding) {
@@ -142,15 +148,38 @@ struct ContentView: View {
         }
     }
 
-    private func evaluate() {
-        try? guest.prepareFirmware()
-        guest.refresh()
-        HuskBridgeFS.shared.prepare()
+    /// آخر مرة سُئل فيها الخادم عن تحديث. onAppear وscenePhase يطلقان معًا عند
+    /// كل تشغيل، فكان الطلب الشبكي يُرسل مرتين في كل فتح للتطبيق.
+    private static var lastUpdateCheck: Date?
+    private static var evaluating = false
 
+    private func evaluate() {
+        guard !Self.evaluating else { return }
+        Self.evaluating = true
+        let g = guest
+        let b = bridge
+        Task { @MainActor in
+            defer { Self.evaluating = false }
+            // نسخ البرامج الثابتة وتجهيز المجلدات عمل ملفات بحت: خارج الخيط الرئيسي.
+            await Task.detached(priority: .userInitiated) {
+                do { try g.prepareFirmware() } catch {
+                    HuskLog.log("guest", "firmware staging failed: \(error.localizedDescription)")
+                }
+                b.prepare()
+            }.value
+            guest.refresh()
+            evaluateAfterStaging()
+        }
+    }
+
+    private func evaluateAfterStaging() {
         // What is installed is compared against the release by digest, not by
         // version name -- see GuestManifest. Deliberately not awaited: it is a
         // network round trip, and nothing on this screen should wait for it.
-        Task { await guest.checkForUpdates() }
+        if Self.lastUpdateCheck.map({ Date().timeIntervalSince($0) > 600 }) ?? true {
+            Self.lastUpdateCheck = Date()
+            Task { await guest.checkForUpdates() }
+        }
 
         if !JITBootstrap.isDebuggerAttached {
             HuskLog.log("ui", "no debugger attached; waiting for StikDebug")
@@ -357,7 +386,7 @@ struct GuestScreenView: View {
 
                         Menu {
                             Button { onBack() } label: {
-                                Label("رجوع إلى Husk", systemImage: "chevron.left")
+                                Label("رجوع إلى IOS APP", systemImage: "chevron.backward")
                             }
                             // Android's own Home key, over the bridge. Three-button
                             // navigation is not drawn in this guest, so without it
@@ -438,18 +467,14 @@ struct SetupView: View {
                 // The icon the user is actually using, so the first screen and
                 // the home screen agree. This used to be a fixed copy of the
                 // default artwork, which quietly disagreed with both.
-                HuskMark(size: 92)
-                    .shadow(color: Theme.accent.opacity(0.3), radius: 24, y: 10)
-                // Letterspaced, as a wordmark rather than a heading: this is
-                // the only screen in the app that is allowed to be a title card.
-                Text("HUSK")
-                    .font(.system(size: 26, weight: .semibold))
-                    .tracking(10)
-                    .padding(.leading, 10)
+                HuskMark(size: 104)
+                    .shadow(color: Theme.shadow, radius: 18, y: 8)
+                Text("IOS APP")
+                    .font(.system(size: 32, weight: .bold))
                 Text("تطبيقات أندرويد، على آيفونك")
-                    .font(.system(size: 13))
+                    .font(.system(size: 15))
                     .foregroundStyle(Theme.textDim)
-                    .padding(.top, -8)
+                    .padding(.top, -10)
 
                 content
             }
@@ -461,10 +486,12 @@ struct SetupView: View {
                 HStack {
                     Spacer()
                     Button { showSettings = true } label: {
-                        Image(systemName: "gearshape")
-                            .font(.title2)
-                            .foregroundStyle(Theme.text.opacity(0.75))
-                            .padding(14)
+                        Image(systemName: "gearshape.fill")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(Theme.textDim)
+                            .frame(width: 36, height: 36)
+                            .background(Theme.surface, in: Circle())
+                            .padding(16)
                     }
                 }
                 Spacer()
@@ -507,7 +534,7 @@ struct SetupView: View {
                          ? "جارٍ تنزيل أندرويد المُقلَع مسبقًا"
                          : "جارٍ تنزيل بيئة أندرويد").font(.headline)
                     ProgressView(value: p).padding(.horizontal, 50)
-                    Text("\(fmt(received)) of \(total > 0 ? fmt(total) : "…")")
+                    Text("\(fmt(received)) من \(total > 0 ? fmt(total) : "…")")
                         .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     Button("إلغاء") { guest.cancel() }.font(.footnote)
                 }
@@ -518,11 +545,12 @@ struct SetupView: View {
                     Text("صار خطأ").font(.headline).foregroundStyle(.red)
                     Text(message).font(.caption).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center).padding(.horizontal, 34)
-                    Button("حاول مرة ثانية") { JITBootstrap.prewarm(); guest.download() }.buttonStyle(.borderedProminent)
+                    Button("حاول مرة ثانية") { JITBootstrap.prewarm(); guest.download() }
+                        .buttonStyle(PillButtonStyle(filled: true))
                 }
             case .missing:
                 VStack(spacing: 12) {
-                    Text("يحتاج Husk إلى بيئة تشغيل أندرويد — حوالي 760 ميغابايت. أما أندرويد نفسه فيُنزَّل بعد ذلك بواسطة بيئة التشغيل.")
+                    Text("يحتاج IOS APP إلى بيئة تشغيل أندرويد — حوالي 760 ميغابايت. أما أندرويد نفسه فيُنزَّل بعد ذلك بواسطة بيئة التشغيل.")
                         .font(.callout).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center).padding(.horizontal, 36)
                     Button("تنزيل بيئة أندرويد") {
@@ -532,7 +560,8 @@ struct SetupView: View {
                         JITBootstrap.prewarm()
                         guest.download()
                     }
-                        .buttonStyle(.borderedProminent)
+                    .buttonStyle(PrimaryButtonStyle())
+                    .padding(.horizontal, 36)
                 }
             case .ready:
                 // Unreachable: SetupView is mounted only while there is no
@@ -548,6 +577,29 @@ struct SetupView: View {
 
     private func fmt(_ bytes: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+}
+
+/// سرعة: كانت كل أيقونة تُقرأ من القرص وتُفكّ في كل إعادة رسم للشبكة، أي
+/// عشرات القراءات مع كل حرف يُكتب في البحث. الآن تُفكّ مرة واحدة وتُحفظ في
+/// ذاكرة مؤقتة مفتاحها المسار وتاريخ تعديل الملف، فتتجدد إن تغيّرت الأيقونة.
+enum IconCache {
+    private static let cache: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>()
+        c.countLimit = 400
+        return c
+    }()
+
+    static func image(at path: String) -> UIImage? {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let date = attrs[.modificationDate] as? Date else { return nil }
+        let key = "\(path)|\(date.timeIntervalSince1970)" as NSString
+        if let hit = cache.object(forKey: key) { return hit }
+        guard let raw = UIImage(contentsOfFile: path) else { return nil }
+        // فك الضغط الآن بدل أول رسم، حتى لا يتقطع التمرير.
+        let image = raw.preparingForDisplay() ?? raw
+        cache.setObject(image, forKey: key)
+        return image
     }
 }
 
@@ -568,11 +620,11 @@ struct AppIcon: View {
 
     /// Proportional, so a large icon is not rounded like a small one. This is
     /// close to the ratio iOS uses for a home screen icon.
-    private var corner: CGFloat { size * 0.225 }
+    private var corner: CGFloat { size * 0.2237 }
 
     var body: some View {
         Group {
-            if let path, let image = UIImage(contentsOfFile: path) {
+            if let path, let image = IconCache.image(at: path) {
                 Image(uiImage: image)
                     .resizable()
                     .interpolation(.medium)
@@ -582,10 +634,11 @@ struct AppIcon: View {
                 // one: most of the grid can be placeholders for the first
                 // minute of a session, and a row of grey glyphs reads as broken.
                 ZStack {
-                    Theme.accentSoft
-                    Image(systemName: "app.dashed")
-                        .font(.system(size: size * 0.42, weight: .light))
-                        .foregroundStyle(Theme.accent.opacity(0.8))
+                    LinearGradient(colors: [Color(uiColor: .systemGray4), Color(uiColor: .systemGray5)],
+                                   startPoint: .top, endPoint: .bottom)
+                    Image(systemName: "app.fill")
+                        .font(.system(size: size * 0.4, weight: .regular))
+                        .foregroundStyle(Color.white.opacity(0.85))
                 }
             }
         }

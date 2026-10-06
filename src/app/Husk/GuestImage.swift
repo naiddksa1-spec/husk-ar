@@ -64,7 +64,7 @@ final class GuestImage: ObservableObject {
     static let imageVersion = "v12"
 
     /// Version shared by the blank userdata seed and downloaded snapshots.
-    private static let userdataSeedVersion = "v10"
+    nonisolated private static let userdataSeedVersion = "v10"
 
     /// Whether to fetch the pre-booted snapshot rather than boot from cold.
     static var wantsSnapshot: Bool {
@@ -359,7 +359,7 @@ final class GuestImage: ObservableObject {
     /// than dead: the bridge still folds it into the log every poll, replaying
     /// Debian and Waydroid text long after either existed, which reads exactly
     /// like a live guest saying the wrong thing.
-    private func cleanUpPreviousGuest() {
+    nonisolated private func cleanUpPreviousGuest() {
         let fm = FileManager.default
         let stale = ["husk-guest.qcow2", "husk-guest.version",
                      "edk2-vars.fd", "edk2-vars.fd.layout",
@@ -378,7 +378,13 @@ final class GuestImage: ObservableObject {
         }
     }
 
-    func prepareFirmware() throws {
+    /// يعمل خارج الخيط الرئيسي: أول تشغيل ينسخ عشرات الميغابايت من الحزمة،
+    /// وكان ذلك يجمّد الشاشة الأولى. محمي بقفل حتى لا يتسابق استدعاءان.
+    nonisolated private static let stagingLock = NSLock()
+
+    nonisolated func prepareFirmware() throws {
+        Self.stagingLock.lock()
+        defer { Self.stagingLock.unlock() }
         cleanUpPreviousGuest()
         let fm = FileManager.default
         if !fm.fileExists(atPath: firmwarePath) {

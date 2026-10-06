@@ -92,7 +92,7 @@ enum JITBootstrap {
             lastFailure = "المصحّح متصل لكنه لا يرد على طلبات الـ trap، "
                         + "وهذا الجهاز لا ينفّذ تعيين MAP_JIT أيضًا، "
                         + "لذلك تعذّر حجز ذاكرة تنفيذية. يحدث هذا عندما "
-                        + "يعمل Husk داخل تطبيق حاوية آخر بدلًا من تثبيته "
+                        + "يعمل IOS APP داخل تطبيق حاوية آخر بدلًا من تثبيته "
                         + "منفردًا (sideload)."
         }
         HuskLog.log("jit", ok ? "JIT region secured; it will be handed to QEMU later"

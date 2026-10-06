@@ -1290,7 +1290,17 @@ final class AndroidHost: ObservableObject {
     /// Single-quoted for a shell, with any quote of its own removed. A guest
     /// filename is chosen by whoever made the file and reaches a shell verbatim.
     nonisolated static func quote(_ path: String) -> String {
-        "'" + path.replacingOccurrences(of: "'", with: "") + "'"
+        "'" + path.replacingOccurrences(of: "'", with: "")
+                  .replacingOccurrences(of: "\0", with: "") + "'"
+    }
+
+    /// أمان: اسم الحزمة يصل إلى shell داخل أندرويد كما هو. يأتي من فهارس
+    /// خارجية ومن ملفات APK لا نثق بها، فاسم مثل `a;reboot` كان سيُنفَّذ كأمر.
+    /// هذا هو شكل أسماء حزم أندرويد الصحيح فقط، وكل ما عداه يُرفض.
+    nonisolated static func isValidPackage(_ name: String) -> Bool {
+        guard !name.isEmpty, name.count <= 255 else { return false }
+        return name.range(of: #"^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$"#,
+                          options: .regularExpression) != nil
     }
 
     /// Ask an app what it is called and what it looks like.
@@ -1312,6 +1322,7 @@ final class AndroidHost: ObservableObject {
         }
         if haveIcon && haveLabel { return }
 
+        guard Self.isValidPackage(package) else { return }
         do {
             let paths = try GuestBridge.shared.shell("pm path \(package)", timeout: 30)
             let apks = paths.split(separator: "\n")
@@ -1484,8 +1495,14 @@ final class AndroidHost: ObservableObject {
 
                     // Quoted and stripped of any path: a filename is chosen by
                     // whoever made the file, and it reaches a shell verbatim.
-                    let safe = name.replacingOccurrences(of: "'", with: "")
-                    let remote = "\(directory)/\(safe)"
+                    // أمان: يُزال أيضًا "/" و"\0"، ويُرفض "." و".." حتى لا يخرج
+                    // الملف من المجلد المقصود.
+                    var safe = name.replacingOccurrences(of: "'", with: "")
+                        .replacingOccurrences(of: "/", with: "_")
+                        .replacingOccurrences(of: "\0", with: "")
+                    if safe.isEmpty || safe == "." || safe == ".." { safe = "file" }
+                    let safeDir = directory.replacingOccurrences(of: "'", with: "")
+                    let remote = "\(safeDir)/\(safe)"
                     _ = try? GuestBridge.shared.shell(
                         "mkdir -p \(Self.quote(directory))")
                     try GuestBridge.shared.push(file, to: "'\(remote)'") { p in
@@ -1497,7 +1514,7 @@ final class AndroidHost: ObservableObject {
                     // media database is what Android's file pickers read.
                     _ = try? GuestBridge.shared.shell(
                         "am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE "
-                      + "-d file://\(remote)", timeout: 60)
+                      + "-d \(Self.quote("file://" + remote))", timeout: 60)
                     HuskLog.log("bridge", "sent \(name) to Download")
                     sent += 1
                 } catch {
@@ -1550,6 +1567,10 @@ final class AndroidHost: ObservableObject {
     }
 
     func uninstall(_ package: String) {
+        guard Self.isValidPackage(package) else {
+            HuskLog.log("bridge", "refusing to uninstall an invalid package name")
+            return
+        }
         busy = "جارٍ إزالة \(package)…"
         Task.detached { [weak self] in
             var out = (try? GuestBridge.shared.shell("pm uninstall \(package)",
@@ -1901,6 +1922,10 @@ final class AndroidHost: ObservableObject {
     }
 
     func launch(_ pkg: String, then: @escaping () -> Void) {
+        guard Self.isValidPackage(pkg) else {
+            HuskLog.log("bridge", "refusing to launch an invalid package name")
+            return
+        }
         markLaunched(pkg)
         busy = "جارٍ الفتح…"
         Task.detached { [weak self] in

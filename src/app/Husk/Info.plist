@@ -21,7 +21,7 @@
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 
 	<key>CFBundleDisplayName</key>
-	<string>Hask</string>
+	<string>IOS APP</string>
 	<key>CFBundleShortVersionString</key>
 	<string>0.6.1</string>
 	<key>CFBundleVersion</key>
@@ -52,9 +52,9 @@
 		<true/>
 	</dict>
 	<key>UIStatusBarHidden</key>
-	<true/>
-	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<false/>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<true/>
 	<!-- Phase 3 drops APKs in here. -->
 	<key>UIFileSharingEnabled</key>
 	<true/>

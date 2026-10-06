@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 // MARK: - Internal Model
 struct AppSource: Identifiable, Equatable {
@@ -15,6 +16,8 @@ struct SourceApp: Identifiable, Equatable {
     let downloadURL: String
     let iconURL: String
     let localizedDescription: String
+    /// بصمة SHA-256 المعلنة في الفهرس، إن وُجدت. يُرفض أي APK لا يطابقها.
+    var sha256: String? = nil
     var id: String { bundleIdentifier }
 }
 
@@ -39,7 +42,10 @@ private struct FDroidLocalized: Codable {
     let description: String?
     let icon: String?
 }
-private struct FDroidPackage: Codable { let apkName: String; let versionName: String }
+private struct FDroidPackage: Codable {
+    let apkName: String; let versionName: String
+    let hash: String?; let hashType: String?
+}
 
 // MARK: - Husk Simple Schema
 private struct HuskSimpleSource: Codable {
@@ -47,6 +53,56 @@ private struct HuskSimpleSource: Codable {
 }
 private struct SourceAppCodable: Codable {
     let name, bundleIdentifier, version, downloadURL, iconURL, localizedDescription: String
+    let sha256: String?
+}
+
+/// ما يُستخرج من فهرس مستودع، بعيدًا عن الخيط الرئيسي.
+private enum SourceParser {
+    /// فهرس F-Droid قد يتجاوز عشرات الميغابايت؛ فكّه على الخيط الرئيسي كان
+    /// يجمّد الواجهة لثوانٍ عند فتح تبويب اكتشف.
+    static func parse(_ data: Data, identifier: String) -> AppSource? {
+        let decoder = JSONDecoder()
+        if let fdroid = try? decoder.decode(FDroidIndex.self, from: data) {
+            let baseURL = fdroid.repo.address
+            var apps: [SourceApp] = []
+            apps.reserveCapacity(fdroid.apps.count)
+            for fApp in fdroid.apps {
+                guard AndroidHost.isValidPackage(fApp.packageName),
+                      let pkgs = fdroid.packages[fApp.packageName], let latest = pkgs.first,
+                      !latest.apkName.contains("/"), !latest.apkName.contains("..")
+                else { continue }
+                let loc = fApp.localized?["en-US"] ?? fApp.localized?.values.first
+                let appName = fApp.name ?? loc?.name ?? fApp.packageName
+                let appSummary = fApp.summary ?? loc?.summary ?? fApp.description ?? loc?.description ?? ""
+                let appIcon = fApp.icon ?? loc?.icon
+                let iconURL = appIcon.map { "\(baseURL)/icons/\($0)" } ?? ""
+                let digest = (latest.hashType?.lowercased() == "sha256") ? latest.hash : nil
+                apps.append(SourceApp(
+                    name: appName,
+                    bundleIdentifier: fApp.packageName,
+                    version: latest.versionName,
+                    downloadURL: "\(baseURL)/\(latest.apkName)",
+                    iconURL: iconURL,
+                    localizedDescription: appSummary,
+                    sha256: digest?.lowercased()
+                ))
+            }
+            apps.sort { $0.name.lowercased() < $1.name.lowercased() }
+            return AppSource(name: fdroid.repo.name, identifier: identifier, apps: apps)
+        }
+        if let simple = try? decoder.decode(HuskSimpleSource.self, from: data) {
+            let apps = simple.apps
+                .filter { AndroidHost.isValidPackage($0.bundleIdentifier) }
+                .map {
+                    SourceApp(name: $0.name, bundleIdentifier: $0.bundleIdentifier,
+                              version: $0.version, downloadURL: $0.downloadURL,
+                              iconURL: $0.iconURL, localizedDescription: $0.localizedDescription,
+                              sha256: $0.sha256?.lowercased())
+                }
+            return AppSource(name: simple.name, identifier: identifier, apps: apps)
+        }
+        return nil
+    }
 }
 
 // MARK: - Manager
@@ -85,23 +141,31 @@ final class SourceManager: ObservableObject {
     // Fetch everything (called on first appear / manual refresh)
     func fetchSources() async {
         for urlString in sourceURLs {
-            if !sources.contains(where: { $0.identifier == urlString }) || loadingSources.isEmpty {
+            if !loadingSources.contains(urlString) {
                 await fetchSource(urlString: urlString)
             }
         }
     }
 
     // Add a new source and fetch ONLY that one
-    func addSource(urlString: String) async {
-        guard !sourceURLs.contains(urlString) else { return }
+    func addSource(urlString raw: String) async {
+        let urlString = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !urlString.isEmpty, !sourceURLs.contains(urlString) else { return }
+        guard let u = URL(string: urlString), u.scheme?.lowercased() == "https", u.host != nil else {
+            AndroidHost.shared.toast = Toast(title: "رابط غير صالح",
+                                             detail: "يجب أن يبدأ المستودع بـ https://", good: false)
+            return
+        }
         sourceURLs.append(urlString)
         await fetchSource(urlString: urlString)
     }
 
     // Fetch a single source by URL
     func fetchSource(urlString: String) async {
-        guard let url = URL(string: urlString) else {
-            fetchErrors[urlString] = "رابط غير صالح"
+        // أمان: المستودع يحدد أي ملف APK سيُثبَّت، فلا يُقبل إلا عبر HTTPS.
+        guard let url = URL(string: urlString), url.scheme?.lowercased() == "https",
+              url.host != nil else {
+            fetchErrors[urlString] = "رابط غير صالح (يجب أن يبدأ بـ https://)"
             return
         }
 
@@ -111,41 +175,15 @@ final class SourceManager: ObservableObject {
         defer { loadingSources.remove(urlString) }
 
         do {
-            let (data, _) = try await session.data(from: url)
-
-            // Try F-Droid v1 format
-            if let fdroid = try? JSONDecoder().decode(FDroidIndex.self, from: data) {
-                let baseURL = fdroid.repo.address
-                var apps: [SourceApp] = []
-                for fApp in fdroid.apps {
-                    guard let pkgs = fdroid.packages[fApp.packageName], let latest = pkgs.first else { continue }
-                    let loc = fApp.localized?["en-US"] ?? fApp.localized?.values.first
-                    let appName = fApp.name ?? loc?.name ?? fApp.packageName
-                    let appSummary = fApp.summary ?? loc?.summary ?? fApp.description ?? loc?.description ?? ""
-                    let appIcon = fApp.icon ?? loc?.icon
-                    let iconURL = appIcon.map { "\(baseURL)/icons/\($0)" } ?? ""
-                    
-                    apps.append(SourceApp(
-                        name: appName,
-                        bundleIdentifier: fApp.packageName,
-                        version: latest.versionName,
-                        downloadURL: "\(baseURL)/\(latest.apkName)",
-                        iconURL: iconURL,
-                        localizedDescription: appSummary
-                    ))
-                }
-                apps.sort { $0.name.lowercased() < $1.name.lowercased() }
-                let source = AppSource(name: fdroid.repo.name, identifier: urlString, apps: apps)
-                upsert(source: source)
+            let (data, response) = try await session.data(from: url)
+            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                fetchErrors[urlString] = "الخادم ردّ بالرمز \(http.statusCode)"
+                return
             }
-            // Fallback: Husk simple format
-            else if let simple = try? JSONDecoder().decode(HuskSimpleSource.self, from: data) {
-                let apps = simple.apps.map {
-                    SourceApp(name: $0.name, bundleIdentifier: $0.bundleIdentifier,
-                              version: $0.version, downloadURL: $0.downloadURL,
-                              iconURL: $0.iconURL, localizedDescription: $0.localizedDescription)
-                }
-                let source = AppSource(name: simple.name, identifier: urlString, apps: apps)
+            let parsed = await Task.detached(priority: .userInitiated) {
+                SourceParser.parse(data, identifier: urlString)
+            }.value
+            if let source = parsed {
                 upsert(source: source)
             } else {
                 fetchErrors[urlString] = "صيغة المصدر غير معروفة"
@@ -173,31 +211,78 @@ final class SourceManager: ObservableObject {
 
     // MARK: - APK Download + Install
 
+    /// يبقي مراقبات التقدّم حيّة؛ كانت تُرمى فورًا فلا يتحرك شريط التقدّم أبدًا.
+    private var progressObservers: [String: NSKeyValueObservation] = [:]
+
     func downloadAndInstall(app: SourceApp) {
-        guard let url = URL(string: app.downloadURL) else { return }
+        guard downloadProgress[app.bundleIdentifier] == nil else { return }
+        guard AndroidHost.isValidPackage(app.bundleIdentifier),
+              let url = URL(string: app.downloadURL), url.scheme?.lowercased() == "https" else {
+            HuskLog.log("sources", "refusing download for \(app.bundleIdentifier): not https or bad package")
+            AndroidHost.shared.toast = Toast(title: "رُفض التنزيل",
+                                             detail: "رابط التطبيق غير آمن (ليس HTTPS).", good: false)
+            return
+        }
         downloadProgress[app.bundleIdentifier] = 0.01
         HuskLog.log("sources", "Downloading \(app.name)")
 
-        let task = URLSession.shared.downloadTask(with: url) { localURL, _, error in
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let downloadDir = docs.appendingPathComponent("Downloaded_APKs", isDirectory: true)
+        // أمان: الاسم مبني من بيانات المستودع، فيُنظَّف حتى لا يخرج من المجلد.
+        let safeVersion = app.version.replacingOccurrences(
+            of: "[^A-Za-z0-9._-]", with: "_", options: .regularExpression)
+        let dest = downloadDir.appendingPathComponent("\(app.bundleIdentifier)-\(safeVersion).apk")
+        let expected = app.sha256
+        let id = app.bundleIdentifier
+
+        let task = URLSession.shared.downloadTask(with: url) { localURL, response, error in
+            // يجب نقل الملف هنا، قبل أن يعود هذا الإغلاق: النظام يحذف الملف المؤقت
+            // فور عودته، والنسخة السابقة كانت تنقله لاحقًا داخل Task فتجده محذوفًا.
+            var failure: String?
+            if let error { failure = error.localizedDescription }
+            else if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                failure = "الخادم ردّ بالرمز \(http.statusCode)"
+            } else if let localURL {
+                do {
+                    try FileManager.default.createDirectory(at: downloadDir, withIntermediateDirectories: true)
+                    if let expected {
+                        let got = try Self.sha256(of: localURL)
+                        guard got == expected else {
+                            throw NSError(domain: "husk", code: 10, userInfo: [NSLocalizedDescriptionKey:
+                                "بصمة الملف لا تطابق المستودع — قد يكون معدّلًا"])
+                        }
+                    }
+                    try? FileManager.default.removeItem(at: dest)
+                    try FileManager.default.moveItem(at: localURL, to: dest)
+                } catch { failure = error.localizedDescription }
+            } else { failure = "لم يصل أي ملف" }
+
             Task { @MainActor in
-                self.downloadProgress.removeValue(forKey: app.bundleIdentifier)
-                guard let localURL, error == nil else {
-                    HuskLog.log("sources", "Download failed: \(String(describing: error))")
-                    return
-                }
-                let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                let downloadDir = docs.appendingPathComponent("Downloaded_APKs")
-                try? FileManager.default.createDirectory(at: downloadDir, withIntermediateDirectories: true, attributes: nil)
-                let dest = downloadDir.appendingPathComponent("\(app.bundleIdentifier)-\(app.version).apk")
-                try? FileManager.default.removeItem(at: dest)
-                if (try? FileManager.default.moveItem(at: localURL, to: dest)) != nil {
+                self.downloadProgress.removeValue(forKey: id)
+                self.progressObservers[id] = nil
+                if let failure {
+                    HuskLog.log("sources", "Download failed for \(id): \(failure)")
+                    AndroidHost.shared.toast = Toast(title: "فشل التنزيل", detail: failure, good: false)
+                } else {
+                    if expected == nil { HuskLog.log("sources", "\(id): source published no sha256") }
                     AndroidHost.shared.install([dest])
                 }
             }
         }
-        task.progress.observe(\.fractionCompleted) { progress, _ in
-            Task { @MainActor in self.downloadProgress[app.bundleIdentifier] = progress.fractionCompleted }
+        progressObservers[id] = task.progress.observe(\.fractionCompleted) { progress, _ in
+            let f = progress.fractionCompleted
+            Task { @MainActor in
+                if self.downloadProgress[id] != nil { self.downloadProgress[id] = max(0.01, f) }
+            }
         }
         task.resume()
+    }
+
+    nonisolated private static func sha256(of url: URL) throws -> String {
+        let fh = try FileHandle(forReadingFrom: url)
+        defer { try? fh.close() }
+        var hasher = SHA256()
+        while let chunk = try fh.read(upToCount: 1 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }

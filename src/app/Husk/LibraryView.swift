@@ -25,7 +25,7 @@ struct LibraryView: View {
                     grid
                 }
             }
-            .navigationTitle("Husk")
+            .navigationTitle("IOS APP")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button { importing = true } label: { Image(systemName: "plus") }
@@ -175,7 +175,7 @@ struct RunningAppView: View {
             if showChrome {
                 HStack(spacing: 10) {
                     Button(action: onExit) {
-                        Label(app.name, systemImage: "chevron.left")
+                        Label(app.name, systemImage: "chevron.backward")
                             .font(.footnote.weight(.medium))
                     }
                     Button { keyboard.toggle() } label: {

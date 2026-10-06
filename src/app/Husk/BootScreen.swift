@@ -50,19 +50,17 @@ struct BootScreen: View {
             VStack(spacing: 0) {
                 Spacer()
 
-                HuskMark(size: 96)
-                    .shadow(color: Theme.accent.opacity(pulse ? 0.45 : 0.15),
-                            radius: pulse ? 34 : 18, y: 10)
+                HuskMark(size: 104)
+                    .scaleEffect(pulse ? 1.0 : 0.96)
+                    .shadow(color: Theme.shadow, radius: pulse ? 26 : 12, y: 10)
                     .animation(.easeInOut(duration: 1.8).repeatForever(autoreverses: true),
                                value: pulse)
                     .onAppear { pulse = true }
 
-                Text("HUSK")
-                    .font(.system(size: 22, weight: .semibold))
-                    .tracking(9)
+                Text("IOS APP")
+                    .font(.system(size: 28, weight: .bold))
                     .foregroundStyle(Theme.text)
-                    .padding(.leading, 9)
-                    .padding(.top, 18)
+                    .padding(.top, 22)
 
                 // The line that talks. Keyed on the index so each one fades
                 // into the next rather than snapping.
@@ -93,7 +91,7 @@ struct BootScreen: View {
                 // An escape hatch, but not an invitation: it turns up only once
                 // waiting has stopped being novel.
                 if now.timeIntervalSince(began) > 8 {
-                    Button("استخدم Husk أثناء الإقلاع", action: onSkip)
+                    Button("استخدم IOS APP أثناء الإقلاع", action: onSkip)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(Theme.textDim)
                         .padding(.top, 14)
@@ -114,18 +112,18 @@ struct BootScreen: View {
         VStack(spacing: 8) {
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(Theme.surfaceHigh)
-                    Capsule().fill(Theme.accent)
+                    Capsule().fill(Color(uiColor: .systemGray5))
+                    Capsule().fill(Theme.text)
                         .frame(width: geo.size.width * fraction)
                         .animation(.snappy(duration: 0.4), value: fraction)
                 }
             }
-            .frame(height: 5)
+            .frame(height: 4)
 
             HStack {
                 Text(shown > 0 ? "\(shown)%" : "جارٍ البدء")
                     .font(.technical(12, weight: .medium))
-                    .foregroundStyle(Theme.accent)
+                    .foregroundStyle(Theme.textDim)
                 Spacer()
                 if let left = remaining {
                     Text(left)

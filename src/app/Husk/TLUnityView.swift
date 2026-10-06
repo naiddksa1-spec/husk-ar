@@ -386,7 +386,7 @@ struct TLUnityAttemptView: View {
                         withAnimation(.snappy(duration: 0.25)) { showLog.toggle() }
                     } label: {
                         HStack(spacing: 6) {
-                            Image(systemName: showLog ? "chevron.down" : "chevron.right")
+                            Image(systemName: showLog ? "chevron.down" : "chevron.forward")
                                 .font(.system(size: 11, weight: .bold))
                                 .frame(width: 12)
                             Text("سجل المحاولة")
@@ -482,7 +482,7 @@ struct TLCocosAttemptView: View {
                     VStack(spacing: 8) {
                         Text("لعبة ثانية محمّلة أصلًا")
                             .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
-                        Text("\(other) بدأت في هذه الجلسة، وما يمكن إيقاف اللعبة بعد ما تشتغل. أغلق Husk تمامًا وافتحه من جديد عشان تشغّل \(app.label).")
+                        Text("\(other) بدأت في هذه الجلسة، وما يمكن إيقاف اللعبة بعد ما تشتغل. أغلق IOS APP تمامًا وافتحه من جديد عشان تشغّل \(app.label).")
                             .font(.system(size: 13)).foregroundStyle(.white.opacity(0.7))
                             .multilineTextAlignment(.center).frame(maxWidth: 460)
                     }

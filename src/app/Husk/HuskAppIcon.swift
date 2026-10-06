@@ -25,9 +25,9 @@ enum HuskAppIcon: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .automatic:   return "تلقائي"
+        case .automatic:   return "جرافيت"
         case .clearLight:  return "شفاف فاتح"
-        case .clearDark:   return "شفاف داكن"
+        case .clearDark:   return "أزرق"
         case .tintedLight: return "ملوّن فاتح"
         case .tintedDark:  return "ملوّن داكن"
         }
@@ -35,7 +35,7 @@ enum HuskAppIcon: String, CaseIterable, Identifiable {
 
     var detail: String {
         self == .automatic
-            ? "يتبع النظام: فاتح وداكن وملوّن."
+            ? "الأيقونة الأساسية، وتتبع النظام في الوضع الملوّن."
             : "هذا الشكل دائمًا."
     }
 
