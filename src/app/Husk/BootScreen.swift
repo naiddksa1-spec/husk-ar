@@ -19,8 +19,6 @@ struct BootScreen: View {
     @State private var began = Date()
     @State private var now = Date()
     @State private var pulse = false
-    @State private var showLog = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// When bootProgress last moved, so the bar can creep between milestones.
     @State private var lastStep = Date()
 
@@ -31,40 +29,48 @@ struct BootScreen: View {
     /// looking at the screen, and the jokes should not repeat before the
     /// information does.
     private static let phrases = [
-        "جارٍ تجهيز مساحة أندرويد.",
-        "نجهّز النظام لتطبيقاتك.",
-        "يمكنك العودة إلى المكتبة أثناء الإقلاع.",
-        "تفاصيل الإقلاع تظهر أسفل الشاشة.",
+        "استعد للروعة",
+        "نوقظ أندرويد",
+        "نعلّم الآيفون لغة أندرويد",
+        "هذا نظام تشغيل كامل — اصبر علينا شوي",
+        "تطبيق من Levi",
+        "ادعمنا بنجمة على المستودع إن أعجبتك الفكرة",
+        "نترجم arm64 كتلةً بكتلة",
+        "لا، لم يتجمّد",
+        "نجهّز نظام الضيف",
+        "يستحق الانتظار تقريبًا",
+        "نتفاوض مع JIT",
+        "قربنا نوصل",
     ]
 
     var body: some View {
         ZStack {
-            Theme.homeWallpaper
+            Theme.bg.ignoresSafeArea()
 
             VStack(spacing: 0) {
                 Spacer()
 
-                HuskMark(size: 112)
-                    .shadow(color: Theme.action.opacity(pulse ? 0.30 : 0.10),
-                            radius: pulse ? 28 : 16, y: 10)
-                    .animation(reduceMotion ? nil : .easeInOut(duration: 2.6).repeatForever(autoreverses: true),
+                HuskMark(size: 96)
+                    .shadow(color: Theme.accent.opacity(pulse ? 0.45 : 0.15),
+                            radius: pulse ? 34 : 18, y: 10)
+                    .animation(.easeInOut(duration: 1.8).repeatForever(autoreverses: true),
                                value: pulse)
-                    .onAppear { pulse = !reduceMotion }
+                    .onAppear { pulse = true }
 
-                Text("MADAR")
-                    .font(.system(size: 24, weight: .medium))
-                    .tracking(4)
-                    .foregroundStyle(.white)
-                    .padding(.leading, 4)
-                    .padding(.top, 28)
+                Text("HUSK")
+                    .font(.system(size: 22, weight: .semibold))
+                    .tracking(9)
+                    .foregroundStyle(Theme.text)
+                    .padding(.leading, 9)
+                    .padding(.top, 18)
 
                 // The line that talks. Keyed on the index so each one fades
                 // into the next rather than snapping.
                 Text(Self.phrases[phrase % Self.phrases.count])
-                    .font(.body)
-                    .foregroundStyle(.white.opacity(0.95))
+                    .font(.system(size: 15))
+                    .foregroundStyle(Theme.textDim)
                     .multilineTextAlignment(.center)
-                    .frame(minHeight: 54)
+                    .frame(height: 42)
                     .padding(.horizontal, 30)
                     .id(phrase)
                     .transition(.opacity)
@@ -74,30 +80,13 @@ struct BootScreen: View {
                     .padding(.horizontal, 44)
                     .padding(.top, 6)
 
-                if now.timeIntervalSince(lastStep) > 120 {
-                    VStack(spacing: 12) {
-                        Text("لم تُرصد مرحلة إقلاع جديدة منذ دقيقتين. قد يكون النظام بطيئاً أو السجل غير متصل؛ هذا ليس تأكيداً أن الضيف توقّف.")
-                            .font(.footnote)
-                            .foregroundStyle(.white)
-                            .multilineTextAlignment(.center)
-                        Button("فتح سجل التشغيل") { showLog = true }
-                            .buttonStyle(.borderedProminent)
-                        Button("العودة إلى الرئيسية", action: onSkip)
-                            .foregroundStyle(.white)
-                    }
-                    .padding(18)
-                    .background(Color.black.opacity(0.45),
-                                in: RoundedRectangle(cornerRadius: 18))
-                    .padding(.horizontal, 24).padding(.top, 18)
-                }
-
                 Spacer()
 
                 // What Android itself is doing, small, under everything else.
                 // The phrases pass the time; this is the part that is true.
                 Text(runner.setupMessage ?? host.status)
-                    .font(.footnote)
-                    .foregroundStyle(.white.opacity(0.90))
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.textDim.opacity(0.75))
                     .lineLimit(1)
                     .padding(.horizontal, 30)
 
@@ -105,10 +94,8 @@ struct BootScreen: View {
                 // waiting has stopped being novel.
                 if now.timeIntervalSince(began) > 8 {
                     Button("استخدم Husk أثناء الإقلاع", action: onSkip)
-                        .font(.subheadline.weight(.medium))
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(Theme.textDim)
-                        .padding(16)
-                        .background(Theme.surfaceHigh, in: Capsule())
                         .padding(.top, 14)
                         .transition(.opacity)
                 }
@@ -116,7 +103,6 @@ struct BootScreen: View {
             .padding(.bottom, 26)
         }
         .onReceive(tick) { now = $0 }
-        .sheet(isPresented: $showLog) { LogView() }
         .onChange(of: runner.bootProgress) { _ in lastStep = Date() }
         .onReceive(rotate) { _ in
             withAnimation(.easeInOut(duration: 0.45)) { phrase += 1 }
@@ -129,12 +115,12 @@ struct BootScreen: View {
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule().fill(Theme.surfaceHigh)
-                    Capsule().fill(Theme.actionGradient)
+                    Capsule().fill(Theme.accent)
                         .frame(width: geo.size.width * fraction)
                         .animation(.snappy(duration: 0.4), value: fraction)
                 }
             }
-            .frame(height: 7)
+            .frame(height: 5)
 
             HStack {
                 Text(shown > 0 ? "\(shown)%" : "جارٍ البدء")
@@ -144,7 +130,7 @@ struct BootScreen: View {
                 if let left = remaining {
                     Text(left)
                         .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.95))
+                        .foregroundStyle(Theme.textDim)
                 }
             }
         }
@@ -161,8 +147,11 @@ struct BootScreen: View {
     /// every 30 seconds. It stops one short of the next milestone and never passes 95%,
     /// so it can never claim more progress than the guest has made.
     private var shown: Int {
-        // Only observed milestones: do not fabricate progress during a stall.
-        min(max(runner.bootProgress, 0), 100)
+        let real = runner.bootProgress
+        guard real > 0, real < 100, !QemuRunner.didRestore else { return real }
+        let next = QemuRunner.bootMilestones.map { $0.2 }.first { $0 > real } ?? 100
+        let creep = Int(now.timeIntervalSince(lastStep) / 30)
+        return max(real, min(real + creep, next - 1, 95))
     }
 
     /// An estimate from this boot's own pace, not from a number someone typed

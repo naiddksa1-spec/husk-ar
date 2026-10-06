@@ -61,7 +61,7 @@ struct OnboardingView: View {
                             Capsule()
                                 .fill(i == page ? Theme.accent : Color.secondary.opacity(0.3))
                                 .frame(width: i == page ? 18 : 6, height: 6)
-                            .animation(.easeInOut(duration: 0.2), value: page)
+                                .animation(.snappy, value: page)
                         }
                     }
                     Button {
@@ -105,17 +105,12 @@ struct OnboardingView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
                     .shadow(color: Theme.accent.opacity(0.35), radius: 22, y: 10)
             }
-            Text("MADAR")
-                .font(.system(size: 22, weight: .medium))
-                .tracking(6)
-                .foregroundStyle(Theme.champagne)
-            Text("أهلاً بك في مدار.")
-                .font(.largeTitle.weight(.semibold))
-                .foregroundStyle(Theme.text)
-                .multilineTextAlignment(.center)
+            Text("Husk").font(.system(size: 40, weight: .semibold, design: .rounded))
+            Text("تطبيقات أندرويد، على آيفونك.")
+                .font(.title3).foregroundStyle(.secondary)
             Text("يشغّل Husk نظام أندرويد حقيقيًا ويفتح ملفات APK داخله. "
                + "بضع أسئلة أولًا — ويمكنك تغيير إجاباتها لاحقًا من الإعدادات.")
-                .font(.body).foregroundStyle(Theme.textDim)
+                .font(.callout).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 34).padding(.top, 4)
             Spacer()
@@ -125,7 +120,7 @@ struct OnboardingView: View {
     private var choices: some View {
         ScrollView {
             VStack(spacing: 14) {
-                Text("خصّص تجربتك")
+                Text("كيف تريد أن يعمل Husk؟")
                     .font(.title2.weight(.semibold))
                     .padding(.top, 34).padding(.bottom, 6)
 
@@ -159,12 +154,12 @@ struct OnboardingView: View {
             Image(systemName: icon)
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(Theme.accent)
-                .frame(width: 40, height: 40)
-                .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: 14,
+                .frame(width: 30, height: 30)
+                .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: 9,
                                                                    style: .continuous))
             VStack(alignment: .leading, spacing: 3) {
                 Text(title).font(.body.weight(.medium))
-                Text(detail).font(.subheadline).foregroundStyle(Theme.textDim)
+                Text(detail).font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
@@ -180,8 +175,7 @@ struct OnboardingView: View {
             Image(systemName: "checkmark.seal.fill")
                 .font(.system(size: 62))
                 .foregroundStyle(Theme.accent)
-            Text("رئيسيتك الجديدة تنتظرك.").font(.largeTitle.weight(.semibold))
-                .multilineTextAlignment(.center)
+            Text("جاهز").font(.largeTitle.weight(.semibold))
             Text("يحتاج Husk إلى JIT لتشغيل أندرويد، ولا يمنحه في iOS إلا أداة "
                + "تصحيح الأخطاء. إن لم يكن مفعّلًا، ستخبرك المكتبة بذلك وتعرض "
                + "عليك فتح StikDebug.")

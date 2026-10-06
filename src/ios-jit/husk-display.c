@@ -19,22 +19,15 @@
 
 #include <os/log.h>
 #include <sys/time.h>
-#include <stdatomic.h>
 
 static double husk_dpy_now_ms(void)
 {
+    static double base = 0;
     struct timeval tv;
-    static _Atomic uint64_t base_ms;
-    uint64_t now;
-    uint64_t base = 0;
-
     gettimeofday(&tv, NULL);
-    now = (uint64_t)tv.tv_sec * 1000u + (uint64_t)tv.tv_usec / 1000u;
-    atomic_compare_exchange_strong_explicit(&base_ms, &base, now,
-                                             memory_order_relaxed,
-                                             memory_order_relaxed);
-    base = atomic_load_explicit(&base_ms, memory_order_relaxed);
-    return (double)(now - base);
+    double t = tv.tv_sec * 1000.0 + tv.tv_usec / 1000.0;
+    if (base == 0) { base = t; }
+    return t - base;
 }
 
 #define HUSK_DLOG(fmt, ...)                                                    \
@@ -52,7 +45,7 @@ typedef struct HuskDisplayState {
     DisplaySurface *surface;
     uint64_t        generation;
     uint64_t        sequence;
-    _Atomic bool    inited;
+    bool            inited;
 } HuskDisplayState;
 
 static HuskDisplayState husk;
@@ -73,10 +66,9 @@ static void husk_dpy_gfx_update(DisplayChangeListener *dcl,
     uint64_t seq = qatomic_fetch_inc(&husk.sequence) + 1;
 
     /* The first few draws are the interesting ones -- they prove the guest is
-     * alive and rendering. After that, nothing: this runs with the BQL held,
-     * and even a sparse fprintf+fflush steals time from every vCPU. The
-     * sequence is exported for the UI's diagnostics instead. */
-    if (seq <= 5) {
+     * alive and rendering. After that, log sparsely so a long session does not
+     * drown the log. */
+    if (seq <= 5 || (seq % 600) == 0) {
         HUSK_DLOG("gfx_update #%llu rect=%dx%d@%d,%d",
                   (unsigned long long)seq, w, h, x, y);
     }
@@ -90,6 +82,11 @@ static void husk_dpy_gfx_switch(DisplayChangeListener *dcl,
     husk.surface = new_surface;
     husk.generation++;
     uint64_t gen = husk.generation;
+    int w = new_surface ? surface_width(new_surface) : 0;
+    int h = new_surface ? surface_height(new_surface) : 0;
+    int stride = new_surface ? surface_stride(new_surface) : 0;
+    int bpp = new_surface ? surface_bits_per_pixel(new_surface) : 0;
+    const void *data = new_surface ? surface_data(new_surface) : NULL;
     qemu_mutex_unlock(&husk.lock);
 
     /*
@@ -101,15 +98,13 @@ static void husk_dpy_gfx_switch(DisplayChangeListener *dcl,
      * plainly -- "gfx_update #1800" and "gfx_switch gen=900" on the same
      * millisecond. A frame is a draw, and gfx_update is the draw.
      *
-     * The old path logged this sparsely, but this runs on the main loop with
-     * the BQL held, so every line written here is time no vCPU can run.
+     * Logged sparsely for the same reason the update path is. This runs on the
+     * main loop with the BQL held, so every line written here is time no vCPU
+     * can run, and a busy guest flips thirty times a second.
      */
-    /* Only the first few: surface replacement is on the BQL path too. */
-    if (gen <= 5) {
-        HUSK_DLOG("gfx_switch gen=%llu surface=%p %dx%d",
-                  (unsigned long long)gen, (void *)new_surface,
-                  new_surface ? surface_width(new_surface) : 0,
-                  new_surface ? surface_height(new_surface) : 0);
+    if (gen <= 5 || (gen % 600) == 0) {
+        HUSK_DLOG("gfx_switch gen=%llu surface=%p %dx%d stride=%d bpp=%d data=%p",
+                  (unsigned long long)gen, (void *)new_surface, w, h, stride, bpp, data);
     }
 }
 
@@ -140,7 +135,7 @@ static const DisplayChangeListenerOps husk_dcl_ops = {
 
 void husk_display_init(void)
 {
-    if (atomic_load_explicit(&husk.inited, memory_order_acquire)) {
+    if (husk.inited) {
         HUSK_DLOG("init: already initialised, ignoring");
         return;
     }
@@ -164,13 +159,13 @@ void husk_display_init(void)
               (void *)husk.dcl.con, QEMU_IS_GRAPHIC_CONSOLE(husk.dcl.con) ? 1 : 0);
 
     register_displaychangelistener(&husk.dcl);
-    atomic_store_explicit(&husk.inited, true, memory_order_release);
+    husk.inited = true;
     HUSK_DLOG("init: listener registered; QEMU will now drive dpy_refresh");
 }
 
 bool husk_display_lock_frame(HuskFrameInfo *out)
 {
-    if (!atomic_load_explicit(&husk.inited, memory_order_acquire) || out == NULL) {
+    if (!husk.inited || out == NULL) {
         return false;
     }
     qemu_mutex_lock(&husk.lock);
@@ -195,15 +190,14 @@ bool husk_display_lock_frame(HuskFrameInfo *out)
 
 void husk_display_unlock_frame(void)
 {
-    if (atomic_load_explicit(&husk.inited, memory_order_acquire)) {
+    if (husk.inited) {
         qemu_mutex_unlock(&husk.lock);
     }
 }
 
 uint64_t husk_display_sequence(void)
 {
-    return atomic_load_explicit(&husk.inited, memory_order_acquire)
-         ? qatomic_read(&husk.sequence) : 0;
+    return husk.inited ? qatomic_read(&husk.sequence) : 0;
 }
 
 /*
@@ -334,15 +328,12 @@ void husk_display_send_pointer(int32_t x, int32_t y, bool button_down)
      * through a bottom half keeps touch latency down; the hold is a few
      * microseconds and the UI thread blocking that long is not perceptible.
      */
-    bool held = bql_locked();
-    if (!held) {
-        bql_lock();
-    }
+    bql_lock();
     con = husk_input_console();
     husk_input_size(con, &w, &h);
 
-    static uint64_t pointer_events;
-    uint64_t ev = qatomic_fetch_inc(&pointer_events) + 1;
+    static uint64_t pointer_events = 0;
+    uint64_t ev = ++pointer_events;
 
     if (con && w > 0 && h > 0) {
         if (x < 0) { x = 0; } else if (x >= w) { x = w - 1; }
@@ -351,19 +342,15 @@ void husk_display_send_pointer(int32_t x, int32_t y, bool button_down)
         qemu_input_queue_abs(con, INPUT_AXIS_Y, y, 0, h);
         qemu_input_queue_btn(con, INPUT_BUTTON_LEFT, button_down);
         qemu_input_event_sync();
-        if (!held && (ev <= 20 || (ev % 200) == 0)) {
+        if (ev <= 20 || (ev % 200) == 0) {
             HUSK_DLOG("pointer #%llu -> guest (%d,%d) down=%d [surface %dx%d]",
                       (unsigned long long)ev, x, y, button_down ? 1 : 0, w, h);
         }
     } else {
-        if (!held) {
-            HUSK_DLOG("pointer #%llu DROPPED -- console=%p size=%dx%d",
-                      (unsigned long long)ev, (void *)con, w, h);
-        }
+        HUSK_DLOG("pointer #%llu DROPPED -- console=%p size=%dx%d",
+                  (unsigned long long)ev, (void *)con, w, h);
     }
-    if (!held) {
-        bql_unlock();
-    }
+    bql_unlock();
 }
 
 bool husk_display_send_key(const char *qcode_name, bool down)
@@ -386,28 +373,21 @@ bool husk_display_send_key(const char *qcode_name, bool down)
         return false;
     }
 
-    static uint64_t keys;
-    uint64_t n = qatomic_fetch_inc(&keys) + 1;
+    static uint64_t keys = 0;
+    uint64_t n = ++keys;
 
-    bool held = bql_locked();
-    if (!held) {
-        bql_lock();
-    }
+    bql_lock();
     con = husk_input_console();
     if (con) {
         qemu_input_event_send_key_qcode(con, (QKeyCode)qcode, down);
     }
-    if (!held) {
-        bql_unlock();
-    }
+    bql_unlock();
     if (!con) {
-        if (!held) {
-            HUSK_DLOG("key '%s' dropped -- no console", qcode_name);
-        }
+        HUSK_DLOG("key '%s' dropped -- no console", qcode_name);
         return false;
     }
 
-    if (!held && (n <= 20 || (n % 100) == 0)) {
+    if (n <= 20 || (n % 100) == 0) {
         HUSK_DLOG("key #%llu '%s' (qcode %d) down=%d",
                   (unsigned long long)n, qcode_name, qcode, down ? 1 : 0);
     }
@@ -416,16 +396,10 @@ bool husk_display_send_key(const char *qcode_name, bool down)
 
 void husk_display_request_update(void)
 {
-    if (!atomic_load_explicit(&husk.inited, memory_order_acquire)
-        || husk.dcl.con == NULL) {
+    if (!husk.inited) {
         return;
     }
-    bool held = bql_locked();
-    if (!held) {
-        bql_lock();
-    }
+    bql_lock();
     graphic_hw_update(husk.dcl.con);
-    if (!held) {
-        bql_unlock();
-    }
+    bql_unlock();
 }

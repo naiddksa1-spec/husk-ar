@@ -427,9 +427,7 @@ private struct StringPool {
         }
         _ = varint()
         let bytes = varint()
-        // An APK is untrusted input. Keep a corrupt length from forcing a huge
-        // allocation or an expensive scan while still accepting normal labels.
-        guard bytes >= 0, bytes <= 4 * 1024 * 1024, p + bytes <= limit else { return nil }
+        guard bytes >= 0, p + bytes <= limit else { return nil }
         return String(bytes: r.d[p..<(p + bytes)], encoding: .utf8)
     }
 
@@ -439,8 +437,7 @@ private struct StringPool {
         if length & 0x8000 != 0 {
             length = ((length & 0x7FFF) << 16) | Int(r.u16(p)); p += 2
         }
-        guard length >= 0, length <= 1_000_000,
-              p + length * 2 <= limit else { return nil }
+        guard length >= 0, p + length * 2 <= limit else { return nil }
         var units: [UInt16] = []
         units.reserveCapacity(length)
         for i in 0..<length { units.append(r.u16(p + i * 2)) }

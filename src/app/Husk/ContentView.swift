@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 import SwiftUI
 import UIKit
-import ImageIO
 
 /// Routes between the four things Husk can be doing.
 ///
@@ -25,7 +24,6 @@ struct ContentView: View {
     @State private var showOnboarding = Onboarding.needed
     /// True while the launch boot screen is up, rather than the library.
     @State private var booting = false
-    @State private var startupFailure: String?
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(Theme.Appearance.key) private var appearance = Theme.Appearance.dark
 
@@ -42,30 +40,22 @@ struct ContentView: View {
             // why it appears instantly rather than reloading.
             TabView(selection: $router.tab) {
                 DiscoverTab()
-                    .tabItem { Label("اكتشف", systemImage: "sparkles") }
+                    .tabItem { Label("اكتشف", systemImage: "sparkle.magnifyingglass") }
                     .tag(HuskTab.discover)
 
                 LibraryTab(onOpenGuest: { showGuestScreen = true },
                            onStartAndroid: startFromLibrary,
                            started: started && runner.isRunning)
-                    .tabItem { Label("الرئيسية", systemImage: "house.fill") }
+                    .tabItem { Label("المكتبة", systemImage: "square.grid.2x2.fill") }
                     .tag(HuskTab.library)
 
                 FilesTab()
-                    .tabItem { Label("الملفات", systemImage: "folder") }
+                    .tabItem { Label("الملفات", systemImage: "folder.fill") }
                     .tag(HuskTab.files)
 
                 SettingsTab()
-                    .tabItem { Label("الإعدادات", systemImage: "slider.horizontal.3") }
+                    .tabItem { Label("الإعدادات", systemImage: "gearshape.fill") }
                     .tag(HuskTab.settings)
-            }
-            .toolbarBackground(Theme.bg, for: .tabBar)
-            .toolbarBackground(.visible, for: .tabBar)
-            .toolbar(.hidden, for: .tabBar)
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                if !(showGuestScreen && started && runner.isRunning) {
-                    homeDock
-                }
             }
             .opacity(showGuestScreen && started && runner.isRunning ? 0 : 1)
 
@@ -124,27 +114,13 @@ struct ContentView: View {
         .fullScreenCover(isPresented: $showOnboarding) {
             OnboardingView {
                 showOnboarding = false
-                if Onboarding.autoStart, JITBootstrap.prewarmed || JITBootstrap.isDebuggerAttached {
+                if Onboarding.autoStart, JITBootstrap.isDebuggerAttached {
                     booting = true
                     start()
                 }
             }
         }
         .sheet(isPresented: $showLogs) { LogView() }
-        .alert("تعذّر بدء أندرويد", isPresented: Binding(
-            get: { startupFailure != nil },
-            set: { if !$0 { startupFailure = nil } })) {
-                Button("فتح السجل") { startupFailure = nil; showLogs = true }
-                Button("إغلاق", role: .cancel) { startupFailure = nil }
-            } message: {
-                Text(startupFailure ?? "")
-            }
-        .onChange(of: runner.isRunning) { running in
-            if !running && started {
-                booting = false
-                startupFailure = "توقّف QEMU. افتح السجل لمعرفة السبب. قد يلزم إغلاق التطبيق وإعادة فتحه قبل تشغيل جلسة جديدة."
-            }
-        }
         // Asking rather than downloading. Two gigabytes over someone's cellular
         // connection is not a decision to make on their behalf.
         .alert(guest.update.title, isPresented: Binding(
@@ -166,63 +142,8 @@ struct ContentView: View {
         }
     }
 
-    /// iPhone-inspired frosted dock, routing the existing mounted tab stacks.
-    /// No imitation status bar or Android back button that cannot perform back.
-    private var homeDock: some View {
-        HStack(spacing: 4) {
-            dockItem(.library, "الرئيسية", "house.fill", .blue)
-            dockItem(.discover, "اكتشف", "sparkles", .purple)
-            dockItem(.files, "ملفاتي", "folder.fill", .orange)
-            dockItem(.settings, "الإعدادات", "gearshape.fill", .gray)
-        }
-        .padding(.horizontal, 8).padding(.vertical, 10)
-        .madarGlass(radius: 32)
-        .padding(.horizontal, 18).padding(.bottom, 8)
-    }
-
-    private func dockItem(_ tab: HuskTab, _ title: String, _ icon: String, _ color: Color) -> some View {
-        Button { router.tab = tab } label: {
-            VStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.system(size: 22, weight: .medium))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(.white)
-                    .frame(width: 48, height: 48)
-                    .background(color.gradient,
-                                in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                Text(title)
-                    .font(.caption.weight(router.tab == tab ? .bold : .regular))
-                    .foregroundStyle(router.tab == tab ? Theme.accent : Theme.textDim)
-                    .lineLimit(1)
-            }
-            .frame(maxWidth: .infinity, minHeight: 66)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(CardButtonStyle())
-        .accessibilityLabel(title)
-        .accessibilityAddTraits(router.tab == tab ? .isSelected : [])
-    }
-
-    @State private var evaluating = false
-
     private func evaluate() {
-        guard !evaluating else { return }
-        evaluating = true
-        // Secure executable memory before potentially slow firmware staging.
-        // A successful prewarm can detach the debugger, so remember the result.
-        let canStart = JITBootstrap.prewarmed || JITBootstrap.isDebuggerAttached
-        if canStart { JITBootstrap.prewarm() }
-        let image = guest
-        Task { @MainActor in
-        defer { evaluating = false }
-        do {
-            try await Task.detached(priority: .userInitiated) {
-                try image.prepareFirmware()
-            }.value
-        } catch {
-            HuskLog.log("guest", "firmware preparation failed: \(error.localizedDescription)")
-            return
-        }
+        try? guest.prepareFirmware()
         guest.refresh()
         HuskBridgeFS.shared.prepare()
 
@@ -231,7 +152,7 @@ struct ContentView: View {
         // network round trip, and nothing on this screen should wait for it.
         Task { await guest.checkForUpdates() }
 
-        if !canStart {
+        if !JITBootstrap.isDebuggerAttached {
             HuskLog.log("ui", "no debugger attached; waiting for StikDebug")
             return
         }
@@ -240,6 +161,8 @@ struct ContentView: View {
         // attaches, while it is still running. Waiting for the Start button means
         // iOS has often suspended the debugger, causing unserviced brk freezes.
         // After the first call this is a no-op, and on success it also detaches the debugger.
+        JITBootstrap.prewarm()
+
         // Start on launch, when that is what was asked for.
         //
         // This deliberately did nothing for a long time, and the reason was
@@ -253,7 +176,6 @@ struct ContentView: View {
         HuskLog.log("ui", "starting Android on launch")
         booting = true
         start()
-        }
     }
 
     /// Whether the start screen should be up at all.
@@ -276,7 +198,7 @@ struct ContentView: View {
     /// the action behind a button reads as a button that does nothing, so the
     /// JIT prompt is raised here instead.
     private func startFromLibrary() {
-        guard JITBootstrap.prewarmed || JITBootstrap.isDebuggerAttached else {
+        guard JITBootstrap.isDebuggerAttached else {
             HuskLog.log("ui", "start asked for without JIT; opening debugger")
             if !JITBootstrap.requestAttach() {
                 _ = JITBootstrap.requestTrollStoreAttach()
@@ -288,12 +210,8 @@ struct ContentView: View {
 
     private func start() {
         guard !started else { return }
-        guard JITBootstrap.prewarmed || JITBootstrap.isDebuggerAttached else {
-            booting = false
-            startupFailure = "JIT غير متاح. فعّله من الإعدادات قبل تشغيل أندرويد."
-            return
-        }
-        HuskLog.log("ui", "JIT region held or debugger attached; starting QEMU")
+        guard JITBootstrap.isDebuggerAttached else { return }
+        HuskLog.log("ui", "CS_DEBUGGED set; starting QEMU")
         // Take the JIT region at the last moment before QEMU, as well as before
         // the download. Whichever comes first wins; the second call is a no-op.
         //
@@ -316,9 +234,6 @@ struct ContentView: View {
         // executable memory" and refused to start a guest that would have run.
         if !JITBootstrap.prewarm(), !JITBootstrap.isLive {
             guard JITBootstrap.mapJITWorks else {
-                booting = false
-                startupFailure = JITBootstrap.lastFailure
-                    ?? "تعذّر حجز ذاكرة JIT. افحص اتصال المصحّح ثم أعد فتح التطبيق."
                 HuskLog.log("jit", "refusing to start QEMU: no trap servicer is "
                                  + "answering and MAP_JIT does not execute here")
                 return
@@ -327,7 +242,6 @@ struct ContentView: View {
                              + "QEMU map its own buffer")
         }
         started = true
-        booting = true
         QemuRunner.shared.start()
         // Start probing the bridge now, not when the library happens to be
         // opened. isReady is only ever set here, and under the old screen-based
@@ -637,29 +551,11 @@ struct SetupView: View {
     }
 }
 
-/// Decodes an icon file off the main thread, downsampled to what is drawn.
+/// An app's icon, or the placeholder while it is being fetched.
 ///
-/// `UIImage(contentsOfFile:)` inside `body` decoded every PNG on the main
-/// thread on every redraw, which is what made the library stutter while icons
-/// were still arriving over the bridge.
-enum LocalIconDecoder {
-    static func decode(path: String, maxPixels: CGFloat) async -> UIImage? {
-        await Task.detached(priority: .userInitiated) { () -> UIImage? in
-            let url = URL(fileURLWithPath: path) as CFURL
-            guard let src = CGImageSourceCreateWithURL(url, nil) else { return nil }
-            let options: [CFString: Any] = [
-                kCGImageSourceCreateThumbnailFromImageAlways: true,
-                kCGImageSourceCreateThumbnailWithTransform: true,
-                kCGImageSourceThumbnailMaxPixelSize: max(Int(maxPixels), 64),
-                kCGImageSourceShouldCacheImmediately: true
-            ]
-            guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, options as CFDictionary)
-            else { return nil }
-            return UIImage(cgImage: cg)
-        }.value
-    }
-}
-
+/// Loaded from the file rather than held in memory: icons arrive one at a time
+/// over the guest bridge, and a list that redraws when each lands should not
+/// also be carrying every decoded bitmap around with it.
 struct AppIcon: View {
     let path: String?
     /// The side of the square it draws itself in.
@@ -670,15 +566,13 @@ struct AppIcon: View {
     /// belongs to whoever is placing it.
     var size: CGFloat = 40
 
-    @State private var image: UIImage?
-
     /// Proportional, so a large icon is not rounded like a small one. This is
     /// close to the ratio iOS uses for a home screen icon.
     private var corner: CGFloat { size * 0.225 }
 
     var body: some View {
         Group {
-            if let image {
+            if let path, let image = UIImage(contentsOfFile: path) {
                 Image(uiImage: image)
                     .resizable()
                     .interpolation(.medium)
@@ -699,15 +593,8 @@ struct AppIcon: View {
         // Rounded like a launcher would draw it. Android icons are square
         // PNGs; nothing else gives them an app-like shape.
         .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
-        // Re-runs whenever the path changes (an icon arriving later over the
-        // bridge), and is cancelled when the view goes away.
-        .task(id: path) {
-            guard let path else { image = nil; return }
-            image = await LocalIconDecoder.decode(path: path, maxPixels: size * 3)
-        }
     }
 }
-
 /// Live log tail with a share button. The share sheet is the practical way to get
 /// husk.log and the guest's serial console off the device.
 /// Settings, reached from the gear on the start screen.

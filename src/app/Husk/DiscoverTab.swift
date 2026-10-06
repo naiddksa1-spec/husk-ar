@@ -38,9 +38,6 @@ struct DiscoverTab: View {
                 } else {
                     ScrollView {
                         LazyVStack(spacing: 24) {
-                            HuskSpotlight(eyebrow: "مكتبة التطبيقات",
-                                          title: "اكتشاف جديد.",
-                                          detail: "تطبيقات من مصادرك، جاهزة لمساحتك.")
                             sourcesHeader
                             ForEach(manager.sources) { source in
                                 let filtered = filteredApps(for: source)
@@ -54,8 +51,6 @@ struct DiscoverTab: View {
                 }
             }
             .navigationTitle("اكتشف")
-            .navigationBarTitleDisplayMode(.large)
-            .toolbarBackground(Theme.bg, for: .navigationBar)
             .searchable(text: $searchText, prompt: "ابحث في \(totalAppCount) تطبيق…")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -119,9 +114,9 @@ struct DiscoverTab: View {
                 Button { showingAddSource = true } label: {
                     Label("إضافة مصدر", systemImage: "plus")
                         .font(.subheadline.bold())
-                        .foregroundStyle(Theme.accent)
+                        .foregroundStyle(.blue)
                         .padding(.horizontal, 14).padding(.vertical, 10)
-                        .background(Theme.accentSoft)
+                        .background(Color.blue.opacity(0.12))
                         .cornerRadius(12)
                 }
                 .buttonStyle(.plain)
@@ -142,13 +137,8 @@ struct DiscoverTab: View {
 
     private func sourceSection(_ source: AppSource, apps: [SourceApp]) -> some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text(source.name)
-                    .font(.title3.weight(.bold)).foregroundStyle(Theme.text)
-                Spacer()
-                Text("\(apps.count)")
-                    .font(.technical(14)).foregroundStyle(Theme.champagne)
-            }
+            Text(source.name)
+                .font(.title2.bold()).foregroundStyle(Theme.text).padding(.horizontal, 4)
 
             let displayApps = debouncedSearchText.isEmpty ? Array(apps.prefix(50)) : apps
             ForEach(displayApps) { app in
@@ -163,7 +153,8 @@ struct DiscoverTab: View {
             }
         }
         .padding()
-        .huskCard()
+        .background(Theme.surface)
+        .cornerRadius(16)
     }
 
     private func appRow(_ app: SourceApp) -> some View {
@@ -177,14 +168,13 @@ struct DiscoverTab: View {
                     ProgressView()
                 }
             }
-            .frame(width: 54, height: 54)
-            .background(Theme.surfaceHigh)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .frame(width: 50, height: 50)
+            .cornerRadius(10)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(app.name).font(.headline).foregroundStyle(Theme.text)
                 Text(app.localizedDescription)
-                    .font(.subheadline).foregroundStyle(Theme.textDim).lineLimit(2)
+                    .font(.caption).foregroundStyle(Theme.textDim).lineLimit(2)
             }
 
             Spacer()
@@ -205,7 +195,7 @@ struct DiscoverTab: View {
                 ZStack {
                     Circle().stroke(Theme.surfaceHigh, lineWidth: 3).frame(width: 28, height: 28)
                     Circle().trim(from: 0, to: progress)
-                        .stroke(Theme.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .stroke(Color.blue, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                         .frame(width: 28, height: 28).rotationEffect(.degrees(-90))
                     Image(systemName: "stop.fill").font(.system(size: 10)).foregroundStyle(Theme.textDim)
                 }
@@ -213,7 +203,7 @@ struct DiscoverTab: View {
                 Button("تنزيل") { manager.downloadAndInstall(app: app) }
                     .font(.subheadline.bold())
                     .padding(.horizontal, 16).padding(.vertical, 8)
-                    .background(Theme.accentSoft).foregroundStyle(Theme.accent)
+                    .background(Color.blue.opacity(0.2)).foregroundStyle(.blue)
                     .cornerRadius(16)
             }
         }
@@ -250,7 +240,7 @@ struct DiscoverTab: View {
                                 }
                                 Spacer()
                                 if newSourceURL == url {
-                                    Image(systemName: "checkmark").foregroundStyle(Theme.accent)
+                                    Image(systemName: "checkmark").foregroundStyle(.blue)
                                 }
                             }
                             .padding().background(Theme.surfaceHigh).cornerRadius(12)

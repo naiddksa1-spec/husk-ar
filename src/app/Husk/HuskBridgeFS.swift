@@ -138,31 +138,26 @@ final class HuskBridgeFS: ObservableObject {
     /// Copy an APK into the inbox. The guest installs anything that appears there.
     func install(apkAt url: URL) {
         let name = url.lastPathComponent
-        // Copying an APK can take seconds (or minutes for a cloud-backed file).
-        // Keep the security-scoped access open for the worker, but do not block
-        // the main actor while the file is read and staged.
+        // Security-scoped: the document picker hands back a URL we only have
+        // permission to read inside this pair of calls.
         let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+
+        // Write beside the inbox and move into place, so the guest's poller can
+        // never see a half-copied APK and try to install it.
         let staging = shareRoot.appendingPathComponent(".incoming-\(name)")
         let dest = inbox.appendingPathComponent(name)
-        Task.detached(priority: .utility) { [weak self] in
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            do {
-                try? FileManager.default.removeItem(at: staging)
-                try FileManager.default.copyItem(at: url, to: staging)
-                try? FileManager.default.removeItem(at: dest)
-                try FileManager.default.moveItem(at: staging, to: dest)
-                let bytes = ((try? FileManager.default.attributesOfItem(atPath: dest.path)[.size])
-                    as? NSNumber)?.intValue ?? 0
-                await MainActor.run {
-                    self?.pendingInstalls.insert(name)
-                    HuskLog.log("bridge", "queued \(name) for install (\(bytes) bytes)")
-                }
-            } catch {
-                await MainActor.run {
-                    HuskLog.log("bridge", "FAILED to queue \(name): \(error.localizedDescription)")
-                    self?.lastAgentMessage = "تعذّرت إضافة \(name): \(error.localizedDescription)"
-                }
-            }
+        do {
+            try? FileManager.default.removeItem(at: staging)
+            try FileManager.default.copyItem(at: url, to: staging)
+            try? FileManager.default.removeItem(at: dest)
+            try FileManager.default.moveItem(at: staging, to: dest)
+            pendingInstalls.insert(name)
+            HuskLog.log("bridge", "queued \(name) for install "
+                               + "(\((try? FileManager.default.attributesOfItem(atPath: dest.path)[.size] as? NSNumber)??.intValue ?? 0) bytes)")
+        } catch {
+            HuskLog.log("bridge", "FAILED to queue \(name): \(error.localizedDescription)")
+            lastAgentMessage = "تعذّرت إضافة \(name): \(error.localizedDescription)"
         }
     }
 
@@ -890,24 +885,10 @@ final class AndroidHost: ObservableObject {
 
     @Published private(set) var isReady = false
     @Published private(set) var status = "جارٍ تشغيل أندرويد…"
-    @Published private(set) var packages: [Package] = []
+    @Published private(set) var packages: [Package] = AndroidHost.loadCatalogue()
     @Published private(set) var busy: String?
     /// What just finished. Progress lives in `busy`; this is the sentence after.
     @Published var toast: Toast?
-
-    init() {
-        // Catalogue decoding and icon-path validation touch disk. Do not make the
-        // first library render wait for that work.
-        Task.detached(priority: .utility) { [weak self] in
-            let loaded = Self.loadCatalogue()
-            await MainActor.run {
-                // The guest may already have answered with a live list; never
-                // let the stale on-disk copy overwrite it.
-                guard let self, self.packages.isEmpty else { return }
-                self.packages = loaded
-            }
-        }
-    }
 
     func say(_ title: String, _ detail: String? = nil, good: Bool = true) {
         toast = Toast(title: title, detail: detail, good: good)
@@ -930,16 +911,7 @@ final class AndroidHost: ObservableObject {
         status = "جارٍ تشغيل أندرويد…"
         Task.detached { [weak self] in
             var attempt = 0
-            let began = Date()
             while true {
-                let running = await MainActor.run { QemuRunner.shared.isRunning }
-                guard running, !Task.isCancelled else {
-                    await MainActor.run {
-                        self?.polling = false
-                        self?.status = "توقّف أندرويد؛ افتح سجل التشغيل."
-                    }
-                    return
-                }
                 attempt += 1
                 do {
                     // One round trip proves the whole path: the forward, the
@@ -948,11 +920,11 @@ final class AndroidHost: ObservableObject {
                     // because when this never succeeds the answer is always in
                     // what the guest said rather than in the fact that it failed.
                     if attempt == 1 || attempt % 10 == 0 {
-                        let who = (try? GuestBridge.shared.shell("id", timeout: 5)) ?? "(no answer)"
+                        let who = (try? GuestBridge.shared.shell("id")) ?? "(no answer)"
                         HuskLog.log("bridge", "guest shell: "
                                   + who.trimmingCharacters(in: .whitespacesAndNewlines))
                     }
-                    let booted = try GuestBridge.shared.shell("getprop sys.boot_completed", timeout: 5)
+                    let booted = try GuestBridge.shared.shell("getprop sys.boot_completed")
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                     if booted == "1" {
                         await MainActor.run {
@@ -975,9 +947,8 @@ final class AndroidHost: ObservableObject {
                 } catch {
                     GuestBridge.shared.disconnect()
                     await MainActor.run {
-                        let elapsed = Int(Date().timeIntervalSince(began))
-                        self?.status = elapsed < 15 ? "جارٍ تشغيل أندرويد…"
-                            : "بانتظار اتصال أندرويد (\(elapsed) ث). افتح الشاشة أو السجل إذا طال الانتظار."
+                        self?.status = attempt < 4 ? "جارٍ تشغيل أندرويد…"
+                                                   : "بانتظار أندرويد (\(attempt * 3) ث)…"
                     }
                 }
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
@@ -1316,10 +1287,10 @@ final class AndroidHost: ObservableObject {
         return (free: numbers[2] * 1024, total: numbers[0] * 1024)
     }
 
-    /// POSIX shell quoting, preserving embedded quotes rather than changing names. A guest
+    /// Single-quoted for a shell, with any quote of its own removed. A guest
     /// filename is chosen by whoever made the file and reaches a shell verbatim.
     nonisolated static func quote(_ path: String) -> String {
-        "'" + path.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+        "'" + path.replacingOccurrences(of: "'", with: "") + "'"
     }
 
     /// Ask an app what it is called and what it looks like.
@@ -1513,13 +1484,11 @@ final class AndroidHost: ObservableObject {
 
                     // Quoted and stripped of any path: a filename is chosen by
                     // whoever made the file, and it reaches a shell verbatim.
-                    guard !name.contains("\0"), !directory.contains("\0") else {
-                        throw BridgeError.io("اسم ملف غير صالح")
-                    }
-                    let remote = "\(directory)/\(name)"
+                    let safe = name.replacingOccurrences(of: "'", with: "")
+                    let remote = "\(directory)/\(safe)"
                     _ = try? GuestBridge.shared.shell(
                         "mkdir -p \(Self.quote(directory))")
-                    try GuestBridge.shared.push(file, to: Self.quote(remote)) { p in
+                    try GuestBridge.shared.push(file, to: "'\(remote)'") { p in
                         Task { @MainActor in
                             self?.busy = "جارٍ إرسال \(name) — \(Int(p * 100))٪"
                         }
@@ -1528,7 +1497,7 @@ final class AndroidHost: ObservableObject {
                     // media database is what Android's file pickers read.
                     _ = try? GuestBridge.shared.shell(
                         "am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE "
-                      + "-d \(Self.quote("file://\(remote)"))", timeout: 60)
+                      + "-d file://\(remote)", timeout: 60)
                     HuskLog.log("bridge", "sent \(name) to Download")
                     sent += 1
                 } catch {

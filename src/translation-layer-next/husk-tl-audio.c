@@ -3,7 +3,6 @@
 #include "husk-tl-audio.h"
 
 #include <AudioToolbox/AudioToolbox.h>
-#include <errno.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -50,11 +49,6 @@ static void on_buffer(void *user, AudioQueueRef q, AudioQueueBufferRef b)
 
 static bool open_queue(int rate, int channels)
 {
-    if (rate <= 0 || channels <= 0 || channels > 8) {
-        tl_log_line("audio: unsupported format %d Hz, %d channel(s)", rate, channels);
-        return false;
-    }
-    if ((size_t)RING_FRAMES > SIZE_MAX / (size_t)channels / sizeof(int16_t)) return false;
     AudioStreamBasicDescription f = { 0 };
     f.mSampleRate = rate; f.mFormatID = kAudioFormatLinearPCM;
     f.mFormatFlags = kLinearPCMFormatFlagIsSignedInteger | kLinearPCMFormatFlagIsPacked;
@@ -63,47 +57,23 @@ static bool open_queue(int rate, int channels)
     OSStatus st = AudioQueueNewOutput(&f, on_buffer, NULL, NULL, NULL, 0, &A.q);
     if (st != noErr) { tl_log_line("audio: AudioQueueNewOutput failed (%d)", (int)st); return false; }
     A.ring = calloc((size_t)RING_FRAMES * (size_t)channels, sizeof(int16_t));
-    if (!A.ring) {
-        tl_log_line("audio: ring allocation failed");
-        AudioQueueDispose(A.q, true); A.q = NULL;
-        return false;
-    }
     A.rate = rate; A.channels = channels;
     for (int i = 0; i < NBUF; i++) {
-        st = AudioQueueAllocateBuffer(A.q, FRAMES_PER_BUF * (UInt32)channels * 2, &A.bufs[i]);
-        if (st != noErr || !A.bufs[i]) {
-            tl_log_line("audio: AudioQueueAllocateBuffer failed (%d)", (int)st);
-            AudioQueueDispose(A.q, true); A.q = NULL;
-            free(A.ring); A.ring = NULL;
-            return false;
-        }
+        AudioQueueAllocateBuffer(A.q, FRAMES_PER_BUF * (UInt32)channels * 2, &A.bufs[i]);
         memset(A.bufs[i]->mAudioData, 0, FRAMES_PER_BUF * (size_t)channels * 2);
         A.bufs[i]->mAudioDataByteSize = FRAMES_PER_BUF * (UInt32)channels * 2;
-        st = AudioQueueEnqueueBuffer(A.q, A.bufs[i], 0, NULL);
-        if (st != noErr) {
-            tl_log_line("audio: AudioQueueEnqueueBuffer failed (%d)", (int)st);
-            AudioQueueDispose(A.q, true); A.q = NULL;
-            free(A.ring); A.ring = NULL;
-            return false;
-        }
+        AudioQueueEnqueueBuffer(A.q, A.bufs[i], 0, NULL);
     }
     st = AudioQueueStart(A.q, NULL);
-    if (st != noErr) {
-        tl_log_line("audio: AudioQueueStart failed (%d)", (int)st);
-        AudioQueueDispose(A.q, true); A.q = NULL;
-        free(A.ring); A.ring = NULL;
-        return false;
-    }
+    if (st != noErr) { tl_log_line("audio: AudioQueueStart failed (%d)", (int)st); return false; }
     tl_log_line("audio: output running, %d Hz, %d channel(s)", rate, channels);
     return true;
 }
 
 static void sleep_for(int frames, int rate)
 {
-    if (frames <= 0 || rate <= 0) return;
-    struct timespec ts = { frames / rate, 0 };
-    ts.tv_nsec = (long)(((int64_t)(frames % rate) * 1000000000ll) / rate);
-    while (nanosleep(&ts, &ts) != 0 && errno == EINTR) { /* retry after interruption */ }
+    struct timespec ts = { 0, (long)((double)frames * 1e9 / rate) };
+    nanosleep(&ts, NULL);
 }
 
 /* The mixer's write: copy into the ring, blocking while it is full (that is the pacing). */

@@ -93,22 +93,15 @@ struct AppDetailView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            HStack {
-                AppIcon(path: live.iconPath, size: 80)
-                Spacer()
-                Image(systemName: "info.circle")
-                    .font(.system(size: 28, weight: .regular))
-                    .foregroundStyle(Theme.accent)
-                    .accessibilityHidden(true)
-            }
-            VStack(alignment: .leading, spacing: 10) {
+        HStack(alignment: .top, spacing: 16) {
+            AppIcon(path: live.iconPath, size: 72)
+            VStack(alignment: .leading, spacing: 6) {
                 Text(live.label)
-                    .font(.title.weight(.bold))
+                    .font(.system(size: 26, weight: .bold))
                     .foregroundStyle(Theme.text)
                     .lineLimit(2)
                 Text(live.name)
-                    .font(.subheadline)
+                    .font(.system(size: 13))
                     .foregroundStyle(Theme.textDim)
                     .lineLimit(1).truncationMode(.middle)
                 HStack(spacing: 6) {
@@ -117,10 +110,8 @@ struct AppDetailView: View {
                 }
                 .padding(.top, 2)
             }
+            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(22)
-        .huskCard()
     }
 
     private var launch: some View {

@@ -66,12 +66,8 @@ void tl_blit_draw(const tl_blit_target *dst,
                   float dx0, float dy0, float dx1, float dy1,
                   int alpha)
 {
-    if (!dst || !dst->pixels || !src || src_w <= 0 || src_h <= 0
-        || dst->width <= 0 || dst->height <= 0 || dst->stride < dst->width
-        || alpha <= 0) return;
-    if (!isfinite(sx0) || !isfinite(sy0) || !isfinite(sx1) || !isfinite(sy1)
-        || !isfinite(dx0) || !isfinite(dy0) || !isfinite(dx1) || !isfinite(dy1)
-        || !(dx1 > dx0) || !(dy1 > dy0)) return;
+    if (!dst || !dst->pixels || !src || src_w <= 0 || src_h <= 0 || alpha <= 0) return;
+    if (!(dx1 > dx0) || !(dy1 > dy0)) return;
     if (alpha > 255) alpha = 255;
 
     /* The source rectangle, widened to whole pixels and held inside the image.
@@ -154,9 +150,7 @@ void tl_blit_draw(const tl_blit_target *dst,
 void tl_blit_fill(const tl_blit_target *dst, float x0f, float y0f, float x1f, float y1f,
                   uint32_t argb)
 {
-    if (!dst || !dst->pixels || dst->width <= 0 || dst->height <= 0
-        || dst->stride < dst->width) return;
-    if (!isfinite(x0f) || !isfinite(y0f) || !isfinite(x1f) || !isfinite(y1f)) return;
+    if (!dst || !dst->pixels) return;
     uint32_t a = argb >> 24;
     if (a == 0) return;
     if (!(x1f > x0f) || !(y1f > y0f)) return;
@@ -185,7 +179,7 @@ void tl_blit_fill(const tl_blit_target *dst, float x0f, float y0f, float x1f, fl
 
 bool tl_blit_image_is_opaque(const uint32_t *pixels, int w, int h)
 {
-    if (!pixels || w <= 0 || h <= 0 || (size_t)w > SIZE_MAX / (size_t)h) return false;
+    if (!pixels || w <= 0 || h <= 0) return false;
     const size_t n = (size_t)w * (size_t)h;
     for (size_t i = 0; i < n; i++) {
         if ((pixels[i] >> 24) != 255) return false;

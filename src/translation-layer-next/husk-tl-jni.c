@@ -40,7 +40,6 @@ struct tl_jclass {
     jobj *mirror;
     bool in_dex;                       /* the APK defines it */
     tl_jmeth **meths; int nmeths, capm;
-    tl_jmeth **meth_tab; size_t meth_tab_n;
     tl_jfield **fields; int nfields, capf;
     jvalue *statics; int nstatics;
     struct { char *name, *sig; void *fn; } *natives; int nnatives;
@@ -50,7 +49,6 @@ struct tl_jclass {
 #define NBUCKETS 512
 static tl_jclass *g_classes[NBUCKETS];
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
-static __thread struct { tl_jclass *cls; uint32_t key; tl_jmeth *m; } t_method_cache;
 static int g_trace;
 static const tl_jhle *g_hle[16];
 static int g_nhle;
@@ -238,60 +236,15 @@ static tl_jhle_fn hle_find_loose(const char *cls, const char *name, const char *
     return NULL;
 }
 
-static uint32_t method_key(const char *name, const char *sig, bool is_static)
-{
-    uint32_t h = hash_str(name);
-    h = (h ^ hash_str(sig)) * 16777619u;
-    return (h ^ (uint32_t)is_static) * 16777619u;
-}
-
-static tl_jmeth *method_find_locked(tl_jclass *cls, const char *name, const char *sig, bool is_static)
-{
-    if (cls->meth_tab_n) {
-        size_t i = method_key(name, sig, is_static) & (cls->meth_tab_n - 1);
-        while (cls->meth_tab[i]) {
-            tl_jmeth *m = cls->meth_tab[i];
-            if (m->is_static == is_static && !strcmp(m->name, name) && !strcmp(m->sig, sig)) return m;
-            i = (i + 1) & (cls->meth_tab_n - 1);
-        }
-        return NULL;
-    }
-    for (int i = 0; i < cls->nmeths; i++) {
-        tl_jmeth *m = cls->meths[i];
-        if (m->is_static == is_static && !strcmp(m->name, name) && !strcmp(m->sig, sig)) return m;
-    }
-    return NULL;
-}
-
-static bool method_rehash_locked(tl_jclass *cls, size_t n)
-{
-    tl_jmeth **tab = calloc(n, sizeof(*tab));
-    if (!tab) return false; /* The linear array remains a correct fallback on OOM. */
-    for (int j = 0; j < cls->nmeths; j++) {
-        tl_jmeth *m = cls->meths[j];
-        size_t i = method_key(m->name, m->sig, m->is_static) & (n - 1);
-        while (tab[i]) i = (i + 1) & (n - 1);
-        tab[i] = m;
-    }
-    free(cls->meth_tab);
-    cls->meth_tab = tab;
-    cls->meth_tab_n = n;
-    return true;
-}
-
 /* Find or make the method `name`/`sig`, walking superclasses for an implementation. */
 static tl_jmeth *lookup_method(tl_jclass *cls, const char *name, const char *sig, bool is_static)
 {
-    uint32_t key = method_key(name, sig, is_static);
-    if (t_method_cache.cls == cls && t_method_cache.key == key && t_method_cache.m
-        && !strcmp(t_method_cache.m->name, name) && !strcmp(t_method_cache.m->sig, sig)) return t_method_cache.m;
     pthread_mutex_lock(&g_lock);
-    tl_jmeth *cached = method_find_locked(cls, name, sig, is_static);
-    pthread_mutex_unlock(&g_lock);
-    if (cached) {
-        t_method_cache = (typeof(t_method_cache)){ cls, key, cached };
-        return cached;
+    for (int i = 0; i < cls->nmeths; i++) {
+        tl_jmeth *m = cls->meths[i];
+        if (m->is_static == is_static && !strcmp(m->name, name) && !strcmp(m->sig, sig)) { pthread_mutex_unlock(&g_lock); return m; }
     }
+    pthread_mutex_unlock(&g_lock);
 
     /* Where could this method come from? An implementation here, the APK's DEX, or a
      * framework class somewhere up the chain (which cannot be checked, so is believed). */
@@ -315,27 +268,9 @@ static tl_jmeth *lookup_method(tl_jclass *cls, const char *name, const char *sig
     m->fn = fn; m->exists = exists;
     parse_sig(m);
     pthread_mutex_lock(&g_lock);
-    /* Another thread may have completed the same lookup while this thread walked
-     * the DEX/HLE tables. Keep one stable method ID and discard the duplicate. */
-    cached = method_find_locked(cls, name, sig, is_static);
-    if (cached) {
-        pthread_mutex_unlock(&g_lock);
-        free(m->name); free(m->sig); free(m);
-        t_method_cache = (typeof(t_method_cache)){ cls, key, cached };
-        return cached;
-    }
     if (cls->nmeths == cls->capm) { cls->capm = cls->capm ? cls->capm * 2 : 8; cls->meths = realloc(cls->meths, (size_t)cls->capm * sizeof(*cls->meths)); }
     cls->meths[cls->nmeths++] = m;
-    bool rebuilt = false;
-    if (!cls->meth_tab_n) rebuilt = method_rehash_locked(cls, 16);
-    else if (cls->nmeths * 2 >= (int)cls->meth_tab_n) rebuilt = method_rehash_locked(cls, cls->meth_tab_n * 2);
-    if (cls->meth_tab_n && !rebuilt) {
-        size_t i = method_key(name, sig, is_static) & (cls->meth_tab_n - 1);
-        while (cls->meth_tab[i]) i = (i + 1) & (cls->meth_tab_n - 1);
-        cls->meth_tab[i] = m;
-    }
     pthread_mutex_unlock(&g_lock);
-    t_method_cache = (typeof(t_method_cache)){ cls, key, m };
     return m;
 }
 
@@ -420,23 +355,16 @@ jvalue tl_jni_get_static(const char *cls, const char *name, const char *sig)
 
 static __thread jobj *t_pending;
 
-static void replace_pending(jobj *e)
-{
-    jobj *old = t_pending;
-    t_pending = e;
-    if (old) tl_jni_unref(old);
-}
-
 void tl_jni_throw(const char *cls, const char *msg)
 {
     jobj *e = tl_jni_new_object(tl_jni_class(cls));
     jvalue v; v.l = tl_jni_new_string(msg ? msg : "");
     tl_jni_set_field(e, "detailMessage", "Ljava/lang/String;", v);
-    replace_pending(e);
+    t_pending = e;
     tl_log_line("jni: throwing %s: %s", cls, msg ? msg : "");
 }
 bool tl_jni_pending(void) { return t_pending != NULL; }
-void tl_jni_clear(void) { replace_pending(NULL); }
+void tl_jni_clear(void) { t_pending = NULL; }
 
 /* --------------------------------------------------------------- calling */
 
@@ -565,7 +493,7 @@ static uint8_t jni_IsInstanceOf(void *env, jo obj, jo cls)
     return assignable(obj->cls, cls->klass.jc);
 }
 
-static int32_t jni_Throw(void *env, jo t) { (void)env; replace_pending(tl_jni_ref(t)); return 0; }
+static int32_t jni_Throw(void *env, jo t) { (void)env; t_pending = t; return 0; }
 static int32_t jni_ThrowNew(void *env, jo cls, const char *msg) { (void)env; tl_jni_throw(cls && cls->kind == TL_K_CLASS ? cls->klass.jc->name : "java/lang/Error", msg); return 0; }
 static jo jni_ExceptionOccurred(void *env) { (void)env; return tl_jni_ref(t_pending); }
 static void jni_ExceptionDescribe(void *env)
@@ -575,7 +503,7 @@ static void jni_ExceptionDescribe(void *env)
     jvalue m = tl_jni_get_field(t_pending, "detailMessage", "Ljava/lang/String;");
     tl_log_line("jni: pending exception %s: %s", t_pending->cls->name, tl_jni_string(m.l) ? tl_jni_string(m.l) : "");
 }
-static void jni_ExceptionClear(void *env) { (void)env; replace_pending(NULL); }
+static void jni_ExceptionClear(void *env) { (void)env; t_pending = NULL; }
 static void jni_FatalError(void *env, const char *msg) { (void)env; tl_log_line("jni: FatalError: %s", msg); abort(); }
 static int32_t jni_PushLocalFrame(void *env, int32_t cap) { (void)env; (void)cap; return 0; }
 static jo jni_PopLocalFrame(void *env, jo r) { (void)env; return r; }

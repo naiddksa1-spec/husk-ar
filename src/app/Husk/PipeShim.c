@@ -24,10 +24,6 @@ int pipe2(int fds[2], int flags)
         errno = EFAULT;
         return -1;
     }
-    if (flags & ~(O_CLOEXEC | O_NONBLOCK)) {
-        errno = EINVAL;
-        return -1;
-    }
     if (pipe(fds) < 0) {
         return -1;
     }

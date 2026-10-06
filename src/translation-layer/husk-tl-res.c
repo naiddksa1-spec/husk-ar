@@ -95,13 +95,13 @@ static uint8_t rd8(const uint8_t *d, size_t n, size_t i)
 
 static uint16_t rd16(const uint8_t *d, size_t n, size_t i)
 {
-    if (i > n || n - i < 2) return 0;
+    if (i + 1 >= n) return 0;
     return (uint16_t)(d[i] | (d[i + 1] << 8));
 }
 
 static uint32_t rd32(const uint8_t *d, size_t n, size_t i)
 {
-    if (i > n || n - i < 4) return 0;
+    if (i + 3 >= n) return 0;
     return (uint32_t)d[i] | ((uint32_t)d[i + 1] << 8) |
            ((uint32_t)d[i + 2] << 16) | ((uint32_t)d[i + 3] << 24);
 }
@@ -111,7 +111,7 @@ static uint32_t rd32(const uint8_t *d, size_t n, size_t i)
 static int pool_init(res_pool *p, const uint8_t *d, size_t n, size_t chunk)
 {
     memset(p, 0, sizeof(*p));
-    if (chunk > n || n - chunk < 28 || rd16(d, n, chunk) != RES_STRING_POOL) return 0;
+    if (chunk >= n || chunk + 28 > n || rd16(d, n, chunk) != RES_STRING_POOL) return 0;
 
     size_t header = rd16(d, n, chunk + 2);
     size_t size = rd32(d, n, chunk + 4);
@@ -121,8 +121,8 @@ static int pool_init(res_pool *p, const uint8_t *d, size_t n, size_t chunk)
 
     /* A real pool is never anywhere near a million strings; a count that large
      * is a corrupt header, and trusting it is an allocation of the same size. */
-    if (header < 28 || size < header || size > n - chunk || count > 1000000) return 0;
-    if (count > (size - header) / 4 || strings > size) return 0;
+    if (header < 28 || size < header || chunk + size > n || count > 1000000) return 0;
+    if (header + (size_t)count * 4 > size || strings > size) return 0;
 
     p->d = d;
     p->n = n;
@@ -174,13 +174,7 @@ static const char *pool_get(res_pool *p, uint32_t idx)
 {
     if (!p->d || idx >= p->count) return NULL;
 
-    size_t index_pos;
-    if (idx > (SIZE_MAX - p->index_off) / 4) return NULL;
-    index_pos = p->index_off + (size_t)idx * 4;
-    if (index_pos > p->n || p->n - index_pos < 4) return NULL;
-    size_t rel = rd32(p->d, p->n, index_pos);
-    if (rel > p->end - p->data_off) return NULL;
-    size_t off = p->data_off + rel;
+    size_t off = p->data_off + rd32(p->d, p->n, p->index_off + (size_t)idx * 4);
     if (off >= p->end) return NULL;
 
     if (p->utf8) {
@@ -195,22 +189,22 @@ static const char *pool_get(res_pool *p, uint32_t idx)
             bytes = ((bytes & 0x7F) << 8) | p->d[q++];
         }
         /* Room for the terminator, and the terminator actually there. */
-        if (q > p->end || bytes > p->end - q - 1 || p->d[q + bytes] != 0) return NULL;
+        if (q + bytes >= p->end || p->d[q + bytes] != 0) return NULL;
         return (const char *)p->d + q;
     }
 
     if (p->cache[idx]) return p->cache[idx];
 
     size_t q = off;
-    if (q > p->end || p->end - q < 2) return NULL;
+    if (q + 2 > p->end) return NULL;
     size_t len = rd16(p->d, p->n, q);
     q += 2;
     if (len & 0x8000) {
-        if (q > p->end || p->end - q < 2) return NULL;
+        if (q + 2 > p->end) return NULL;
         len = ((len & 0x7FFF) << 16) | rd16(p->d, p->n, q);
         q += 2;
     }
-    if (len > (p->end - q) / 2 || len > (SIZE_MAX - 1) / 4) return NULL;
+    if (q + len * 2 > p->end) return NULL;
 
     char *out = malloc(len * 4 + 1);
     if (!out) return NULL;

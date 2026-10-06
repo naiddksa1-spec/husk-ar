@@ -99,18 +99,6 @@ static jobj *direct_buffer(void *mem, int64_t cap)
     return o;
 }
 
-static void release_buffer(jobj *buf, void *mem)
-{
-    /* Callbacks are synchronous. Invalidate retained Java views before freeing
-     * the native allocation, instead of leaking 128 KiB per request. */
-    jvalue zero = {0};
-    if (buf) {
-        tl_jni_set_field(buf, "address", "J", zero);
-        tl_jni_set_field(buf, "capacity", "J", zero);
-    }
-    free(mem);
-}
-
 static void UWR_run(tl_jcall *c)
 {
     uwr *u = U(c->self);
@@ -126,25 +114,12 @@ static void UWR_run(tl_jcall *c)
     /* the request body, if any: the engine says how much with a null buffer, then hands it over in pieces */
     const size_t CHUNK = 128 * 1024;
     uint8_t *chunk = malloc(CHUNK), *body = NULL; size_t body_len = 0;
-    if (!chunk) {
-        error(env, cls, u->ptr, TL_HTTP_SDK, tl_jni_new_string("Upload allocation failed"));
-        return;
-    }
     jobj *buf = direct_buffer(chunk, (int64_t)CHUNK);
     if (upload(env, cls, u->ptr, NULL) > 0) {
         for (;;) {
             int n = upload(env, cls, u->ptr, buf);
-            if (n == 0) break;
-            if (n < 0 || (size_t)n > CHUNK || (size_t)n > (64u << 20) - body_len) {
-                error(env, cls, u->ptr, TL_HTTP_SDK, tl_jni_new_string("Invalid upload chunk or upload limit exceeded"));
-                free(body); release_buffer(buf, chunk); return;
-            }
-            uint8_t *grown = realloc(body, body_len + (size_t)n);
-            if (!grown) {
-                error(env, cls, u->ptr, TL_HTTP_SDK, tl_jni_new_string("Upload allocation failed"));
-                free(body); release_buffer(buf, chunk); return;
-            }
-            body = grown;
+            if (n <= 0) break;
+            body = realloc(body, body_len + (size_t)n);
             memcpy(body + body_len, chunk, (size_t)n);
             body_len += (size_t)n;
         }
@@ -154,10 +129,6 @@ static void UWR_run(tl_jcall *c)
     hmap *hm = u->headers ? HM(u->headers) : NULL;
     int nh = hm ? hm->n : 0;
     const char **names = calloc((size_t)nh + 1, sizeof(char *)), **values = calloc((size_t)nh + 1, sizeof(char *));
-    if (!names || !values) {
-        error(env, cls, u->ptr, TL_HTTP_SDK, tl_jni_new_string("Header allocation failed"));
-        free(names); free(values); free(body); release_buffer(buf, chunk); return;
-    }
     for (int i = 0; i < nh; i++) { names[i] = S(hm->k[i]); values[i] = S(hm->v[i]); }
 
     tl_http_request rq = { .url = u->url, .method = u->method, .nheaders = nh, .header_names = names, .header_values = values,
@@ -168,11 +139,12 @@ static void UWR_run(tl_jcall *c)
         tl_log_line("http: %s failed: %s", u->url, rs.message);
         error(env, cls, u->ptr, rs.error, tl_jni_new_string(rs.message));
     } else {
+        long content_length = -1;
         for (int i = 0; i < rs.nheaders; i++) {
             header(env, cls, u->ptr, tl_jni_new_string(rs.header_names[i]), tl_jni_new_string(rs.header_values[i]));
+            if (!strcasecmp(rs.header_names[i], "content-length")) content_length = atol(rs.header_values[i]);
         }
-        /* Body is bounded to 64 MiB. Do not narrow an untrusted Content-Length. */
-        length(env, cls, u->ptr, (int)rs.body_len);
+        length(env, cls, u->ptr, (int)(content_length >= 0 ? content_length : (long)rs.body_len));
         status(env, cls, u->ptr, rs.status);
         for (size_t off = 0; off < rs.body_len;) {
             size_t n = rs.body_len - off < CHUNK ? rs.body_len - off : CHUNK;
@@ -184,7 +156,7 @@ static void UWR_run(tl_jcall *c)
         tl_http_response_free(&rs);
     }
     free(names); free(values); free(body);
-    release_buffer(buf, chunk);
+    /* chunk stays: the buffer object may still be referenced by the engine */
 }
 
 #define M_(c, n, s, f) { c, n, s, f }

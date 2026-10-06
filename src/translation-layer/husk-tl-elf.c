@@ -128,9 +128,7 @@ static bool vaddr_to_off(const elf *e, uint64_t vaddr, uint64_t len, uint64_t *o
     for (size_t i = 0; i < e->nloads; i++) {
         uint64_t lv = e->loads[i].vaddr, fs = e->load_filesz[i];
         if (vaddr >= lv && vaddr - lv <= fs && len <= fs - (vaddr - lv)) {
-            uint64_t delta = vaddr - lv;
-            if (e->load_off[i] > UINT64_MAX - delta) return false;
-            uint64_t o = e->load_off[i] + delta;
+            uint64_t o = e->load_off[i] + (vaddr - lv);
             if (!in_file(e, o, len)) {
                 return false;
             }
@@ -201,12 +199,8 @@ size_t tl_page_plan(const tl_segment *loads, size_t nloads,
     }
     memset(flags, 0, (size_t)n);
 
-    uint64_t r0 = 0, r1 = 0;
-    if (relro) {
-        if (relro->vaddr > UINT64_MAX - relro->memsz) return 0;
-        r0 = relro->vaddr;
-        r1 = relro->vaddr + relro->memsz;
-    }
+    uint64_t r0 = relro ? relro->vaddr : 0;
+    uint64_t r1 = relro ? relro->vaddr + relro->memsz : 0;
     for (size_t i = 0; i < nloads; i++) {
         const tl_segment *s = &loads[i];
         if (s->memsz == 0) {
@@ -348,11 +342,10 @@ static void count_table(const elf *e, uint64_t vaddr, uint64_t size, uint64_t en
                         tl_elf_report *r)
 {
     uint64_t off;
-    if (!vaddr || !size || entsize == 0 || entsize > size
-        || !vaddr_to_off(e, vaddr, size, &off)) {
+    if (!vaddr || !size || !vaddr_to_off(e, vaddr, size, &off)) {
         return;
     }
-    for (uint64_t i = 0; i <= size - entsize; i += entsize) {
+    for (uint64_t i = 0; i + entsize <= size; i += entsize) {
         count_reloc(r, (uint32_t)rd64(e->d + off + i + 8));
     }
 }
@@ -635,10 +628,10 @@ static void analyze_dynamic(const elf *e, tl_elf_report *r)
 
 void tl_elf_analyze(const uint8_t *data, size_t size, tl_elf_report *r)
 {
-    if (!data || !r) return;
     memset(r, 0, sizeof(*r));
     r->packing = "none";
     r->ok = true;
+
     if (size < 64 || memcmp(data, "\x7f" "ELF", 4) != 0) {
         set_error(r, "not an ELF file");
         return;
@@ -680,8 +673,7 @@ void tl_elf_analyze(const uint8_t *data, size_t size, tl_elf_report *r)
                 set_error(r, "more than %d loadable segments", MAX_LOADS);
                 return;
             }
-            if (filesz > memsz || vaddr > UINT64_MAX - memsz
-                || !in_file(&e, off, filesz)) {
+            if (filesz > memsz || !in_file(&e, off, filesz)) {
                 set_error(r, "segment %u lies outside the file", i);
                 return;
             }
@@ -700,10 +692,6 @@ void tl_elf_analyze(const uint8_t *data, size_t size, tl_elf_report *r)
         } else if (type == PT_TLS) {
             r->has_tls = true;
         } else if (type == PT_GNU_RELRO) {
-            if (vaddr > UINT64_MAX - memsz) {
-                set_error(r, "RELRO segment overflows");
-                return;
-            }
             e.has_relro = true;
             e.relro = (tl_segment){ vaddr, memsz, flags };
         }

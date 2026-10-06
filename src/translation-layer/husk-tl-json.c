@@ -17,18 +17,9 @@ static void put(tl_json *j, const char *s, size_t n)
     if (j->failed) {
         return;
     }
-    if (j->len == SIZE_MAX || n > SIZE_MAX - j->len - 1) {
-        j->failed = true;
-        return;
-    }
-    size_t needed = j->len + n + 1;
-    if (needed > j->cap) {
+    if (j->len + n + 1 > j->cap) {
         size_t cap = j->cap ? j->cap : 1024;
-        while (cap < needed) {
-            if (cap > SIZE_MAX / 2) {
-                cap = needed;
-                break;
-            }
+        while (cap < j->len + n + 1) {
             cap *= 2;
         }
         char *grown = realloc(j->buf, cap);
@@ -90,13 +81,12 @@ void tl_json_begin_array(tl_json *j)  { open_(j, '['); }
 void tl_json_end_array(tl_json *j)    { close_(j, ']'); }
 
 /* Length of the valid UTF-8 sequence at `s`, or 0 if it is not one. */
-static size_t utf8_len(const unsigned char *s, size_t available)
+static size_t utf8_len(const unsigned char *s)
 {
     unsigned char c = s[0];
     size_t n;
     unsigned min;
     unsigned cp;
-    if (available == 0) return 0;
     if (c < 0x80) {
         return 1;
     } else if ((c & 0xE0) == 0xC0) {
@@ -108,7 +98,6 @@ static size_t utf8_len(const unsigned char *s, size_t available)
     } else {
         return 0;
     }
-    if (n > available) return 0;
     for (size_t i = 1; i < n; i++) {
         if ((s[i] & 0xC0) != 0x80) {
             return 0;
@@ -130,30 +119,25 @@ static void quoted(tl_json *j, const char *s)
 {
     put(j, "\"", 1);
     const unsigned char *p = (const unsigned char *)s;
-    size_t remaining = s ? strlen(s) : 0;
-    while (remaining != 0) {
+    while (*p) {
         unsigned char c = *p;
         if (c == '"' || c == '\\') {
             char esc[2] = { '\\', (char)c };
             put(j, esc, 2);
             p++;
-            remaining--;
         } else if (c < 0x20) {
             char esc[8];
             snprintf(esc, sizeof(esc), "\\u%04x", c);
             puts_(j, esc);
             p++;
-            remaining--;
         } else {
-            size_t n = utf8_len(p, remaining);
+            size_t n = utf8_len(p);
             if (n == 0) {
                 put(j, "?", 1);
-                remaining--;
                 p++;
             } else {
                 put(j, (const char *)p, n);
                 p += n;
-                remaining -= n;
             }
         }
     }

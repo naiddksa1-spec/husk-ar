@@ -9,7 +9,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include <limits.h>
 
 #if defined(__APPLE__)
 #include <CoreFoundation/CoreFoundation.h>
@@ -43,22 +42,6 @@ typedef struct {
 typedef struct {
     float left, top, right, bottom;
 } tl_framework_rect;
-
-/* Bitmap dimensions ultimately come from app bytecode/resources. Keep the
- * multiplication checked so a malformed or hostile size cannot wrap into a
- * tiny allocation followed by an out-of-bounds raster write. */
-static tl_framework_bitmap *bitmap_alloc(int width, int height)
-{
-    if (width <= 0 || height <= 0 || (size_t)width > SIZE_MAX / (size_t)height
-        || (size_t)width * (size_t)height > SIZE_MAX / sizeof(uint32_t)) return NULL;
-    tl_framework_bitmap *bmp = calloc(1, sizeof(*bmp));
-    if (!bmp) return NULL;
-    bmp->width = width;
-    bmp->height = height;
-    bmp->pixels = calloc((size_t)width * (size_t)height, sizeof(uint32_t));
-    if (!bmp->pixels) { free(bmp); return NULL; }
-    return bmp;
-}
 
 typedef struct {
     int capacity;
@@ -188,13 +171,13 @@ static tl_framework_bitmap *load_png_from_apk(const char *apk_path, const char *
     CGImageRef img = isrc ? CGImageSourceCreateImageAtIndex(isrc, 0, NULL) : NULL;
 
     if (img) {
-        size_t iw = CGImageGetWidth(img), ih = CGImageGetHeight(img);
-        bmp = (iw <= INT_MAX && ih <= INT_MAX) ? bitmap_alloc((int)iw, (int)ih) : NULL;
-        if (bmp) bmp->cg_image = img;
+        bmp = calloc(1, sizeof(*bmp));
+        bmp->width = (int)CGImageGetWidth(img);
+        bmp->height = (int)CGImageGetHeight(img);
+        bmp->pixels = calloc(bmp->width * bmp->height, sizeof(uint32_t));
+        bmp->cg_image = img;
 
         /* Rasterize pixels in ARGB format */
-        if (!bmp) { CGImageRelease(img); img = NULL; }
-        if (!bmp) { if (isrc) CFRelease(isrc); if (cf_data) CFRelease(cf_data); if (owned) free((void *)data); tl_zip_close(&z); return NULL; }
         CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
         CGContextRef c = CGBitmapContextCreate(bmp->pixels, bmp->width, bmp->height, 8,
                                                bmp->width * 4, cs,
@@ -1207,7 +1190,6 @@ static bool bitmap_createBitmap(tl_dex_context *ctx, tl_dex_object *this_obj, tl
     (void)this_obj;
     tl_dex_class *b_class = tl_dex_find_class(ctx, "Landroid/graphics/Bitmap;");
     tl_dex_object *new_obj = tl_dex_alloc_object(b_class);
-    if (!new_obj) { if (ret) ret->l = NULL; return false; }
 
     if (nargs >= 5 && args[0].l && tl_dex_native(args[0].l)) {
         /* createBitmap(Bitmap src, int x, int y, int width, int height) */
@@ -1217,8 +1199,10 @@ static bool bitmap_createBitmap(tl_dex_context *ctx, tl_dex_object *this_obj, tl
         int sw = args[3].i;
         int sh = args[4].i;
 
-        tl_framework_bitmap *dst = bitmap_alloc(sw, sh);
-        if (!dst) { if (ret) ret->l = NULL; return true; }
+        tl_framework_bitmap *dst = calloc(1, sizeof(*dst));
+        dst->width = sw;
+        dst->height = sh;
+        dst->pixels = calloc(sw * sh, sizeof(uint32_t));
 
         for (int y = 0; y < sh; y++) {
             int src_y = sy + y;
@@ -1244,8 +1228,11 @@ static bool bitmap_createBitmap(tl_dex_context *ctx, tl_dex_object *this_obj, tl
         /* createBitmap(int width, int height, ...) */
         int w = args[0].i;
         int h = args[1].i;
-        tl_framework_bitmap *dst = bitmap_alloc(w, h);
-        if (dst) tl_dex_set_native(new_obj, dst);
+        tl_framework_bitmap *dst = calloc(1, sizeof(*dst));
+        dst->width = w;
+        dst->height = h;
+        dst->pixels = calloc(w * h, sizeof(uint32_t));
+        tl_dex_set_native(new_obj, dst);
     }
     if (ret) ret->l = new_obj;
     return true;
@@ -1256,14 +1243,15 @@ static bool bitmap_createScaledBitmap(tl_dex_context *ctx, tl_dex_object *this_o
     (void)this_obj; (void)nargs;
     tl_dex_class *b_class = tl_dex_find_class(ctx, "Landroid/graphics/Bitmap;");
     tl_dex_object *new_obj = tl_dex_alloc_object(b_class);
-    if (!new_obj) { if (ret) ret->l = NULL; return false; }
 
     if (args[0].l && tl_dex_native(args[0].l)) {
         tl_framework_bitmap *src = tl_dex_native(args[0].l);
         int dstW = args[1].i;
         int dstH = args[2].i;
-        tl_framework_bitmap *dst = bitmap_alloc(dstW, dstH);
-        if (!dst) { if (ret) ret->l = NULL; return true; }
+        tl_framework_bitmap *dst = calloc(1, sizeof(*dst));
+        dst->width = dstW;
+        dst->height = dstH;
+        dst->pixels = calloc(dstW * dstH, sizeof(uint32_t));
 
         /* Nearest-neighbor scale */
         for (int y = 0; y < dstH; y++) {
@@ -1909,12 +1897,8 @@ static bool arrayList_add(tl_dex_context *ctx, tl_dex_object *this_obj, tl_dex_v
     if (this_obj && tl_dex_native(this_obj)) {
         tl_framework_list *lst = tl_dex_native(this_obj);
         if (lst->size >= lst->capacity) {
-            if (lst->capacity > INT_MAX / 2) return true;
-            int new_capacity = lst->capacity * 2;
-            tl_dex_val *grown = realloc(lst->items, (size_t)new_capacity * sizeof(tl_dex_val));
-            if (!grown) return true;
-            lst->items = grown;
-            lst->capacity = new_capacity;
+            lst->capacity *= 2;
+            lst->items = realloc(lst->items, lst->capacity * sizeof(tl_dex_val));
         }
         lst->items[lst->size++] = args[1];
     }

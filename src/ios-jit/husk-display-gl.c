@@ -26,12 +26,6 @@
 
 #include <dlfcn.h>
 
-/* Thumbnail readbacks are useful while diagnosing a new renderer, but each
- * glReadPixels synchronously drains the GPU and runs on QEMU's BQL thread. */
-#ifndef HUSK_GL_DIAGNOSTICS
-#define HUSK_GL_DIAGNOSTICS 0
-#endif
-
 #include "husk-display-gl.h"
 
 static DisplayGLCtx husk_gl_ctx;
@@ -188,7 +182,6 @@ static void husk_gl_scanout_texture(DisplayChangeListener *dcl,
 #define HUSK_TW 40
 #define HUSK_TH 18
 
-#if HUSK_GL_DIAGNOSTICS
 static void husk_gl_thumbnail(const char *what, GLuint fb, int w, int h)
 {
     static const char ramp[] = " .:-=+*#%@";
@@ -243,14 +236,11 @@ static void husk_gl_sample(void)
                       husk_guest_fb.width, husk_guest_fb.height);
     husk_gl_thumbnail("what we present", 0, husk_win_w, husk_win_h);
 }
-#endif
 
 static void husk_gl_update(DisplayChangeListener *dcl,
                            uint32_t x, uint32_t y, uint32_t w, uint32_t h)
 {
-#if HUSK_GL_DIAGNOSTICS
     bool sample;
-#endif
 
     if (!husk_have_scanout || husk_surface == EGL_NO_SURFACE) {
         return;
@@ -268,7 +258,7 @@ static void husk_gl_update(DisplayChangeListener *dcl,
     if (husk_metal_tex && husk_metal_present) {
         husk_metal_present(husk_metal_tex, husk_flip ? 1 : 0,
                            husk_metal_w, husk_metal_h);
-        qatomic_fetch_inc(&husk_gl_frames);
+        husk_gl_frames++;
         return;
     }
 
@@ -324,14 +314,12 @@ static void husk_gl_update(DisplayChangeListener *dcl,
      * completely, so the only thumbnails in the log were the two from before
      * anything had been drawn. Early and often, then rarely.
      */
-#if HUSK_GL_DIAGNOSTICS
     sample = husk_gl_frames == 1 || husk_gl_frames == 30
           || husk_gl_frames == 120 || husk_gl_frames == 300
           || (husk_gl_frames % 600) == 0;
     if (sample) {
         husk_gl_sample();
     }
-#endif
 
     /*
      * Force the alpha channel opaque, leaving colour untouched.
@@ -364,7 +352,7 @@ static void husk_gl_update(DisplayChangeListener *dcl,
         }
         return;
     }
-    qatomic_fetch_inc(&husk_gl_frames);
+    husk_gl_frames++;
 }
 
 static void husk_gl_refresh(DisplayChangeListener *dcl)
@@ -393,7 +381,7 @@ static bool husk_gl_ctx_is_compatible_dcl(DisplayGLCtx *dgc,
 
 uint64_t husk_display_gl_frames(void)
 {
-    return qatomic_read(&husk_gl_frames);
+    return husk_gl_frames;
 }
 
 /*
@@ -660,8 +648,6 @@ bool husk_display_gl_bind(void)
     con = qemu_console_lookup_by_index(0);
     if (!con) {
         fprintf(stderr, "[husk-gl] no console 0\n");
-        qemu_gl_fini_shader(husk_gls);
-        husk_gls = NULL;
         return false;
     }
     /*
@@ -672,12 +658,6 @@ bool husk_display_gl_bind(void)
      */
     fprintf(stderr, "[husk-gl] bind: console=%p graphic=%d gl_block=%d\n",
             (void *)con, qemu_console_is_graphic(con) ? 1 : 0, 0);
-    if (!qemu_console_is_graphic(con)) {
-        fprintf(stderr, "[husk-gl] console 0 is not graphical; using software display\n");
-        qemu_gl_fini_shader(husk_gls);
-        husk_gls = NULL;
-        return false;
-    }
 
     husk_gl_dcl.con = con;
     fprintf(stderr, "[husk-gl] bind: qemu_console_set_display_gl_ctx\n");

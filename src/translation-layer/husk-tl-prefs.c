@@ -168,9 +168,7 @@ bool tl_prefs_save(const tl_prefs *p)
 
     /* Written beside the real file and renamed over it, so a crash or a power
      * cut mid-write leaves the previous settings, not a half-file. */
-    size_t path_len = strlen(p->path);
-    if (path_len > SIZE_MAX - 5) return false;
-    size_t n = path_len + 5;
+    size_t n = strlen(p->path) + 5;
     char *tmp = malloc(n);
     if (!tmp) return false;
     snprintf(tmp, n, "%s.tmp", p->path);
@@ -207,7 +205,6 @@ bool tl_prefs_attach(tl_prefs *p, const char *path)
     if (!p) return false;
     free(p->path);
     p->path = path ? strdup(path) : NULL;
-    if (path && !p->path) return false;
     if (!path) return true;
 
     FILE *f = fopen(path, "r");
@@ -218,7 +215,6 @@ bool tl_prefs_attach(tl_prefs *p, const char *path)
     ssize_t len;
     bool first = true, ok = true;
     while ((len = getline(&line, &cap, f)) >= 0) {
-        if (len > (ssize_t)(1u << 20)) { ok = false; break; }
         while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) line[--len] = 0;
         if (first) {
             first = false;

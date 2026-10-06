@@ -305,40 +305,21 @@ static uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] | (p[1] << 8)); 
 /* One string of an Android binary XML string pool, as UTF-8 into out. */
 static bool pool_string(const uint8_t *pool, size_t pool_size, uint32_t index, char *out, size_t n)
 {
-    if (!pool || !out || !n || pool_size < 28) return false;
-    out[0] = 0;
     uint32_t count = rd32(pool + 8), flags = rd32(pool + 16), strings = rd32(pool + 20);
-    uint16_t header = rd16(pool + 2);
-    if (header < 28 || header > pool_size || count > (pool_size - header) / 4
-        || index >= count || strings < header + (uint64_t)count * 4 || strings > pool_size) return false;
-    uint32_t relative = rd32(pool + header + (size_t)4 * index);
-    if (relative >= pool_size - strings) return false;
-    size_t off = (size_t)strings + relative;
+    if (index >= count || 28 + 4ull * index + 4 > pool_size) return false;
+    size_t off = strings + rd32(pool + 28 + 4 * index);
+    if (off + 4 > pool_size) return false;
     const uint8_t *p = pool + off;
-    const uint8_t *end = pool + pool_size;
     if (flags & 0x100) {                                        /* UTF-8: char length, byte length, bytes */
-        if (p == end) return false;
-        size_t l = *p++;
-        if (l & 0x80) { if (p == end) return false; p++; }
-        if (p == end) return false;
-        size_t b = *p++;
-        if (b & 0x80) { if (p == end) return false; b = ((b & 0x7F) << 8) | *p++; }
-        if (b >= n || b >= (size_t)(end - p) || p[b] != 0 || memchr(p, 0, b)) return false;
+        size_t l = *p++; if (l & 0x80) p++;
+        size_t b = *p++; if (b & 0x80) b = ((b & 0x7F) << 8) | *p++;
+        if (b >= n) b = n - 1;
         memcpy(out, p, b); out[b] = 0;
     } else {                                                    /* UTF-16 */
-        if ((size_t)(end - p) < 2) return false;
         size_t l = rd16(p); p += 2;
-        if (l & 0x8000) {
-            if ((size_t)(end - p) < 2) return false;
-            l = ((l & 0x7FFF) << 16) | rd16(p); p += 2;
-        }
-        if (l >= n || l >= (size_t)(end - p) / 2 || rd16(p + 2 * l) != 0) return false;
+        if (l & 0x8000) { l = ((l & 0x7FFF) << 16) | rd16(p); p += 2; }
         size_t k = 0;
-        for (size_t i = 0; i < l; i++) {
-            uint16_t ch = rd16(p + 2 * i);
-            if (!ch || ch > 127) return false; /* package/attribute names are ASCII */
-            out[k++] = (char)ch;
-        }
+        for (size_t i = 0; i < l && k + 1 < n; i++) out[k++] = (char)rd16(p + 2 * i);   /* package names are ASCII */
         out[k] = 0;
     }
     return true;
@@ -346,44 +327,26 @@ static bool pool_string(const uint8_t *pool, size_t pool_size, uint32_t index, c
 
 bool husk_unity_package_name(const char *apk, char *out, unsigned long out_len)
 {
-    if (!apk || !out || !out_len) return false;
-    out[0] = 0;
     tl_zip z;
     char err[160];
     if (!tl_zip_open(&z, apk, err, sizeof(err))) return false;
     bool ok = false;
     const tl_zip_entry *e = tl_zip_find(&z, "AndroidManifest.xml");
-    const uint8_t *data = NULL; size_t len = 0; bool owned = false;
-    if (e && tl_zip_data(&z, e, 8u << 20, &data, &len, &owned, err, sizeof(err)) && len >= 8
-        && rd16(data) == 0x0003 && rd16(data + 2) >= 8 && rd16(data + 2) <= len
-        && rd32(data + 4) >= rd16(data + 2) && rd32(data + 4) <= len) {
-        len = rd32(data + 4);
+    const uint8_t *data; size_t len; bool owned = false;
+    if (e && tl_zip_data(&z, e, 8u << 20, &data, &len, &owned, err, sizeof(err)) && len > 8 && rd16(data) == 0x0003) {
         const uint8_t *pool = NULL; size_t pool_size = 0;
-        for (size_t off = rd16(data + 2); off <= len && len - off >= 8; ) {
+        for (size_t off = rd16(data + 2); off + 8 <= len; ) {
             uint16_t type = rd16(data + off); uint32_t size = rd32(data + off + 4);
-            if (size < 8 || size > len - off || rd16(data + off + 2) < 8
-                || rd16(data + off + 2) > size) break;
+            if (size < 8 || off + size > len) break;
             if (type == 0x0001) { pool = data + off; pool_size = size; }
             else if (type == 0x0102 && pool) {                  /* the first element is <manifest> */
                 const uint8_t *el = data + off;
-                if (size < 36 || rd16(el + 2) != 16) break;
                 uint16_t astart = rd16(el + 24), asize = rd16(el + 26), acount = rd16(el + 28);
-                if (astart < 20 || asize < 20 || astart > size - 16
-                    || acount > (size - 16 - astart) / asize) break;
                 for (unsigned i = 0; i < acount; i++) {
                     const uint8_t *at = el + 16 + astart + (size_t)i * asize;
                     char name[40];
                     if (pool_string(pool, pool_size, rd32(at + 4), name, sizeof(name)) && !strcmp(name, "package")
-                        && rd32(at + 8) != 0xFFFFFFFFu && pool_string(pool, pool_size, rd32(at + 8), out, out_len)) {
-                        ok = out[0] != 0;
-                        for (size_t k = 0; out[k] && ok; k++) {
-                            unsigned char ch = (unsigned char)out[k];
-                            ok = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
-                                || (ch >= '0' && ch <= '9') || ch == '_' || ch == '.';
-                            if (ch == '.' && (!k || !out[k + 1] || out[k + 1] == '.')) ok = false;
-                        }
-                        break;
-                    }
+                        && rd32(at + 8) != 0xFFFFFFFFu && pool_string(pool, pool_size, rd32(at + 8), out, out_len)) { ok = true; break; }
                 }
                 break;
             }
@@ -392,6 +355,5 @@ bool husk_unity_package_name(const char *apk, char *out, unsigned long out_len)
     }
     if (owned) free((void *)data);
     tl_zip_close(&z);
-    if (!ok) out[0] = 0;
     return ok;
 }
