@@ -21,7 +21,7 @@
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 
 	<key>CFBundleDisplayName</key>
-	<string>هاسك</string>
+	<string>Hask</string>
 	<key>CFBundleShortVersionString</key>
 	<string>0.6.1</string>
 	<key>CFBundleVersion</key>
