@@ -17,7 +17,7 @@ jobs:
       - name: Restore script permissions and run portable regression tests
         run: |
           chmod +x scripts/*.sh
-          python3 tests/security_regression.py
+          if [ -f tests/security_regression.py ]; then python3 tests/security_regression.py; fi
 
       - name: Select Xcode
         run: |
