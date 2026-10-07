@@ -77,8 +77,7 @@ struct GuestManifest: Codable, Equatable {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse,
                   (200...299).contains(http.statusCode) else {
-                guard manifest.isValid else { return nil }
-            HuskLog.log("guest", "manifest unavailable (HTTP "
+                HuskLog.log("guest", "manifest unavailable (HTTP "
                           + "\((response as? HTTPURLResponse)?.statusCode ?? 0))")
                 return nil
             }
@@ -89,7 +88,6 @@ struct GuestManifest: Codable, Equatable {
                       + "\(manifest.snapshot.sha256.prefix(12))…")
             return manifest
         } catch {
-            guard manifest.isValid else { return nil }
             HuskLog.log("guest", "manifest fetch failed: \(error.localizedDescription)")
             return nil
         }
