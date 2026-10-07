@@ -717,11 +717,26 @@ static jo jni_ToReflectedField(void *env, jo cls, void *fid, uint8_t is_static)
 #define REF_Long(x) (x)
 #define REF_Float(x) (x)
 #define REF_Double(x) (x)
+/*
+ * An enum constant (or a singleton named like one) is an object of its own class held in a static field of it, made by the class initialiser, which nothing here
+ * runs. Native code that reads one expects the object, and some libraries (Epic Online Services') treat null as a broken install, so the first read makes one.
+ */
+static void enum_constant_fallback(void *fid, jvalue *slot)
+{
+    tl_jfield *f = fid;
+    if (slot->l || !f || !f->cls || f->sig[0] != 'L') return;
+    size_t n = strlen(f->cls->name);
+    if (strncmp(f->sig + 1, f->cls->name, n) || f->sig[n + 1] != ';' || f->sig[n + 2]) return;
+    for (const char *p = f->name; *p; p++) if (!((*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9') || *p == '_')) return;
+    slot->l = tl_jni_new_object(f->cls);
+    TRACE("jni: static %s.%s was never set: made an object of its own class", f->cls->name, f->name);
+}
+/* A field ID is NULL when its lookup failed (and left an exception pending); native code that goes on to use it must not take the process down. */
 #define GEN_FIELDS(T, CT, F) \
-    static CT jni_Get##T##Field(void *env, jo o, void *fid) { (void)env; return (CT)REF_##T(field_slot(o, fid)->F); } \
-    static void jni_Set##T##Field(void *env, jo o, void *fid, CT v) { (void)env; field_slot(o, fid)->F = v; } \
-    static CT jni_GetStatic##T##Field(void *env, jo c, void *fid) { (void)env; (void)c; return (CT)REF_##T(field_slot(NULL, fid)->F); } \
-    static void jni_SetStatic##T##Field(void *env, jo c, void *fid, CT v) { (void)env; (void)c; field_slot(NULL, fid)->F = v; }
+    static CT jni_Get##T##Field(void *env, jo o, void *fid) { (void)env; if (!fid || !o) return (CT)0; return (CT)REF_##T(field_slot(o, fid)->F); } \
+    static void jni_Set##T##Field(void *env, jo o, void *fid, CT v) { (void)env; if (!fid || !o) return; field_slot(o, fid)->F = v; } \
+    static CT jni_GetStatic##T##Field(void *env, jo c, void *fid) { (void)env; (void)c; if (!fid) return (CT)0; jvalue *sl = field_slot(NULL, fid); if (#T[0] == 'O') enum_constant_fallback(fid, sl); return (CT)REF_##T(sl->F); } \
+    static void jni_SetStatic##T##Field(void *env, jo c, void *fid, CT v) { (void)env; (void)c; if (!fid) return; field_slot(NULL, fid)->F = v; }
 JV_TYPES(GEN_FIELDS)
 
 /* --- strings --- */
@@ -786,7 +801,7 @@ static void jni_GetStringUTFRegion(void *env, jo s, int32_t start, int32_t len, 
 {
     (void)env;
     size_t n; uint16_t *u = to_utf16(tl_jni_string(s) ? tl_jni_string(s) : "", &n);
-    if (start >= 0 && len >= 0 && (size_t)(start + len) <= n) { char *o = from_utf16(u + start, (size_t)len); strcpy(buf, o); free(o); }
+    if (start >= 0 && len >= 0 && (size_t)start <= n && (size_t)len <= n - (size_t)start) { char *o = from_utf16(u + start, (size_t)len); if (o) { memcpy(buf, o, strlen(o) + 1); free(o); } }
     free(u);
 }
 

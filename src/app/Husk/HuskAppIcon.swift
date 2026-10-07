@@ -25,18 +25,18 @@ enum HuskAppIcon: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .automatic:   return "تلقائي"
-        case .clearLight:  return "شفاف فاتح"
-        case .clearDark:   return "شفاف داكن"
-        case .tintedLight: return "ملوّن فاتح"
-        case .tintedDark:  return "ملوّن داكن"
+        case .automatic:   return "Automatic"
+        case .clearLight:  return "Clear Light"
+        case .clearDark:   return "Clear Dark"
+        case .tintedLight: return "Tinted Light"
+        case .tintedDark:  return "Tinted Dark"
         }
     }
 
     var detail: String {
         self == .automatic
-            ? "يتبع النظام: فاتح وداكن وملوّن."
-            : "هذا الشكل دائمًا."
+            ? "Follows the system: light, dark and tinted."
+            : "Always this look."
     }
 
     /// What UIKit wants: nil for the primary, the asset name otherwise.
@@ -90,35 +90,10 @@ enum HuskAppIcon: String, CaseIterable, Identifiable {
 }
 
 
-/// The two tabs.
-///
-/// Android and the console used to be tabs of their own. Android is not one any
-/// more because the guest has to stay mounted whatever is on screen, and the
-/// console moved into Diagnostics -- it is something you go looking for, not a
-/// quarter of the app's navigation.
+/// The two tabs: the library (games run on the translation layer, and Android's own apps) and settings.
 enum HuskTab: String, CaseIterable, Identifiable {
-    case discover
     case library
-    case files
     case settings
 
     var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .discover: return "اكتشف"
-        case .library:  return "المكتبة"
-        case .files:    return "الملفات"
-        case .settings: return "الإعدادات"
-        }
-    }
-
-    var icon: String {
-        switch self {
-        case .discover: return "sparkle.magnifyingglass"
-        case .library:  return "square.grid.2x2.fill"
-        case .files:    return "folder.fill"
-        case .settings: return "gearshape.fill"
-        }
-    }
 }

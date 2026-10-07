@@ -2,28 +2,24 @@
 import SwiftUI
 import UIKit
 
-/// Husk's visual vocabulary, in one place so every screen agrees.
+/// Husk's visual vocabulary.
 ///
-/// Dark is the design: a near-black page with surfaces lifted a few points out
-/// of it. Light is the same arrangement turned over — a pale page with white
-/// cards on it, edged by the same hairline — so depth still reads as "lifted",
-/// not as grey boxes. Every colour here is resolved per appearance, which is
-/// why none of them are plain `Color(red:green:blue:)` any more.
+/// The app is drawn with the system's own materials: grouped lists on the system's grouped background,
+/// the system's tab bar and navigation bars, its label colours, and an accent the user can change
+/// (`AppTheme`). The names below remain so every screen can say what it means ("a surface", "dim text")
+/// without caring which system colour that is today -- but none of them is a colour of Husk's own, so the
+/// app is light or dark as the phone is, and as the user pins it.
 ///
-/// Which appearance is shown is the user's choice (`Theme.Appearance`), and it
-/// defaults to dark, so nobody who already has the app sees it change.
+/// The one thing that is not the system's is the chrome over the guest's picture (`huskPanel`,
+/// `GuestControl`), which is drawn flat and always dark: it floats over a picture of another phone.
 enum Theme {
-    /// ألوان نظام iOS الأصلية — الواجهة تتبع نظام آبل مباشرة.
-    static let bgUI = UIColor { $0.userInterfaceStyle == .dark
-        ? UIColor(red: 0.10, green: 0.09, blue: 0.12, alpha: 1)
-        : UIColor(red: 0.97, green: 0.96, blue: 0.98, alpha: 1) }
+    /// The page behind grouped content.
+    static let bgUI = UIColor.systemGroupedBackground
     static let bg = Color(uiColor: bgUI)
     /// Cards, rows, anything holding content.
-    static let surface = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark
-        ? UIColor(red: 0.16, green: 0.15, blue: 0.18, alpha: 1)
-        : UIColor(red: 0.995, green: 0.99, blue: 0.998, alpha: 1) })
-    /// One step further up: chips, icon wells, the things that sit on a card.
-    static let surfaceHigh = Color(uiColor: .tertiarySystemBackground)
+    static let surface = Color(uiColor: .secondarySystemGroupedBackground)
+    /// One step further up: wells, chips, the things that sit on a card.
+    static let surfaceHigh = Color(uiColor: .tertiarySystemFill)
     /// The edge that separates a surface from the page.
     static let hairlineUI = UIColor.separator
     static let hairline = Color(uiColor: hairlineUI)
@@ -32,21 +28,17 @@ enum Theme {
     static let text = Color(uiColor: textUI)
     static let textDim = Color(uiColor: .secondaryLabel)
 
-    /// لون التمييز الأصلي للنظام.
-    static let accent = Color(red: 0.43, green: 0.27, blue: 0.70)
-    static let accentSoft = accent.opacity(0.10)
-    /// Darker on a light page: the dark-mode green all but vanishes on white.
+    /// The user's accent: what is pressed, selected or switched on.
+    static var accent: Color { AppTheme.shared.accentColor }
+    static var accentSoft: Color { AppTheme.shared.accentColor.opacity(0.16) }
     static let good = Color(uiColor: .systemGreen)
-    /// What a floating thing casts. A light page wants far less of it.
-    static let shadow = Color(uiColor: UIColor { $0.userInterfaceStyle == .light
-        ? UIColor.black.withAlphaComponent(0.12) : UIColor.black.withAlphaComponent(0.4) })
+    /// What a floating thing casts.
+    static let shadow = Color.black.opacity(0.25)
 
-    /// The appearance the app is drawn in.
-    ///
-    /// Dark is the default and the design the app was drawn for; System follows
-    /// the phone; Light pins the light arrangement.
+    /// The appearance the app is drawn in. System is the default: it follows the phone, light by day and
+    /// dark by night. Light and Dark pin one.
     enum Appearance: String, CaseIterable, Identifiable {
-        case dark, light, system
+        case system, light, dark
 
         static let key = "husk.appearance"
 
@@ -54,31 +46,30 @@ enum Theme {
 
         var title: String {
             switch self {
-            case .dark: return "داكن"
-            case .light: return "فاتح"
-            case .system: return "النظام"
+            case .system: return "System"
+            case .light: return "Light"
+            case .dark: return "Dark"
             }
         }
 
         var style: UIUserInterfaceStyle {
             switch self {
-            case .dark: return .dark
-            case .light: return .light
             case .system: return .unspecified
+            case .light: return .light
+            case .dark: return .dark
             }
         }
 
         static var current: Appearance {
-            Appearance(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .light
+            Appearance(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .system
         }
     }
 
     /// Applies an appearance to every window the app has.
     ///
-    /// Through UIKit rather than `.preferredColorScheme`: going back to "follow
-    /// the system" means handing the window `nil`, and SwiftUI does not reliably
-    /// let go of a scheme it has once forced. The window's own override does,
-    /// and sheets and covers presented from it inherit it.
+    /// Through UIKit rather than `.preferredColorScheme`: going back to "follow the system" means handing
+    /// the window `nil`, and SwiftUI does not reliably let go of a scheme it has once forced. The window's
+    /// own override does, and sheets and covers presented from it inherit it.
     static func apply(_ appearance: Appearance) {
         for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
             for window in scene.windows {
@@ -87,44 +78,37 @@ enum Theme {
         }
     }
 
-    static let cardCorner: CGFloat = 24
-    static let rowCorner: CGFloat = 16
+    static let cardCorner: CGFloat = 14
+    static let rowCorner: CGFloat = 12
 
     static var backdrop: some View { bg.ignoresSafeArea() }
-
 }
 
-
 extension View {
-    /// The app's one container: a lifted surface with a hairline edge.
+    /// A container for content that is not a list row: a surface on the grouped page, as the system draws one.
     @ViewBuilder
     func huskCard<S: Shape>(_ shape: S, high: Bool = false) -> some View {
         self.background(high ? Theme.surfaceHigh : Theme.surface, in: shape)
-            .overlay(shape.stroke(Theme.hairline, lineWidth: 0.5))
     }
 
     func huskCard(high: Bool = false) -> some View {
-        huskCard(RoundedRectangle(cornerRadius: Theme.cardCorner, style: .continuous),
-                 high: high)
+        huskCard(RoundedRectangle(cornerRadius: Theme.cardCorner, style: .continuous), high: high)
     }
 
     /// Chrome that sits over the guest's own picture.
     ///
-    /// Solid, not glass. iOS 26 will happily render this as Liquid Glass and it
-    /// looks wrong here: a floating, refracting pill over a game is the phone's
-    /// design language arguing with the app's, and over a dark guest screen it
-    /// mostly reads as smeared. A flat panel with a hairline is what the design
-    /// asks for, and it looks the same on every iOS.
+    /// Solid, not glass. iOS 26 will happily render this as Liquid Glass and it looks wrong here: a
+    /// floating, refracting pill over a game is the phone's design language arguing with the guest's. A
+    /// flat panel with a hairline looks the same on every iOS.
     ///
-    /// Always the dark one, whatever the app's appearance: it floats over a
-    /// guest that is mostly black, and the controls on it are drawn in white.
+    /// Always dark, whatever the app's appearance: it floats over a guest that is mostly black, and the
+    /// controls on it are drawn in white.
     func huskPanel<S: Shape>(_ shape: S) -> some View {
-        self.background(Theme.surface.opacity(0.94), in: shape)
+        self.background(Color(red: 0.082, green: 0.094, blue: 0.129).opacity(0.94), in: shape)
             .overlay(shape.stroke(Color.white.opacity(0.10), lineWidth: 0.5))
             .environment(\.colorScheme, .dark)
     }
 }
-
 
 /// Technical values — sizes, counts, frame rates, commit hashes — are set in a
 /// monospaced face so digits line up between rows and do not reflow as they
@@ -174,12 +158,10 @@ struct CircleButton: View {
             Image(systemName: systemImage)
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(active ? .white : Theme.text)
-                .frame(width: 44, height: 44)
+                .frame(width: 36, height: 36)
                 .background(active ? Theme.accent : Theme.surfaceHigh, in: Circle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(systemImage == "plus" ? "إضافة" :
-                            systemImage == "arrow.clockwise" ? "تحديث" : systemImage)
     }
 }
 
@@ -211,9 +193,9 @@ struct Chip: View {
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 16, weight: .medium))
+                .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(selected ? .white : Theme.textDim)
-                .padding(.horizontal, 16).padding(.vertical, 12)
+                .padding(.horizontal, 16).padding(.vertical, 8)
                 .background(selected ? Theme.accent : Theme.surfaceHigh, in: Capsule())
         }
         .buttonStyle(.plain)
@@ -273,11 +255,11 @@ struct HuskRow: View {
                             in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 17, weight: .medium))
+                    .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(tint)
                 if let subtitle {
                     Text(subtitle)
-                        .font(.system(size: 14))
+                        .font(.system(size: 12))
                         .foregroundStyle(Theme.textDim)
                         .lineLimit(1)
                 }
@@ -357,15 +339,15 @@ struct EmptyState: View {
     var body: some View {
         VStack(spacing: 14) {
             Image(systemName: systemImage)
-                .font(.system(size: 42, weight: .light))
+                .font(.system(size: 30, weight: .light))
                 .foregroundStyle(Theme.accent)
-                .frame(width: 88, height: 88)
+                .frame(width: 64, height: 64)
                 .background(Theme.accentSoft, in: Circle())
             Text(title)
-                .font(.system(size: 24, weight: .semibold))
+                .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(Theme.text)
             Text(message)
-                .font(.system(size: 17))
+                .font(.system(size: 14))
                 .foregroundStyle(Theme.textDim)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 28)
@@ -454,59 +436,5 @@ struct GuestControl: View {
         }
         .buttonStyle(.plain)
         .disabled(busy)
-    }
-}
-
-/// A screen's own header: the mark or a back arrow, whatever buttons belong in
-/// the corner, and the big title under them.
-///
-/// Drawn rather than left to the navigation bar. On iOS 26 the system bar and
-/// every button in it is Liquid Glass — a floating, refracting capsule that
-/// belongs to a different design than this one, and cannot be told not to be.
-/// Pushed screens keep the real bar, where the back gesture and the title
-/// behaviour matter more than the finish; the roots draw their own.
-struct HuskHeader<Trailing: View>: View {
-    var mark = false
-    var back: (() -> Void)? = nil
-    var title: String? = nil
-    @ViewBuilder var trailing: Trailing
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                if let back {
-                    Button(action: back) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(Theme.text)
-                            .frame(width: 36, height: 36)
-                            .background(Theme.surfaceHigh, in: Circle())
-                    }
-                    .buttonStyle(.plain)
-                } else if mark {
-                    HStack(spacing: 10) {
-                        HuskMark(size: 30)
-                        Text("ios app")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(Theme.textDim)
-                    }
-                }
-                Spacer(minLength: 8)
-                trailing
-            }
-            if let title {
-                Text(title)
-                    .font(.system(size: 34, weight: .bold))
-                    .foregroundStyle(Theme.text)
-            }
-        }
-        .padding(.top, 12)
-        .padding(.bottom, 8)
-    }
-}
-
-extension HuskHeader where Trailing == EmptyView {
-    init(mark: Bool = false, back: (() -> Void)? = nil, title: String? = nil) {
-        self.init(mark: mark, back: back, title: title) { EmptyView() }
     }
 }

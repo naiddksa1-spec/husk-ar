@@ -36,7 +36,7 @@ enum {
     DT_GNU_HASH_ = 0x6ffffef5, DT_ANDROID_RELA_ = 0x60000011, DT_ANDROID_RELASZ_ = 0x60000012,
     DT_ANDROID_RELR_ = 0x6fffe000, DT_ANDROID_RELRSZ_ = 0x6fffe001,
     R_NONE = 0, R_ABS64 = 257, R_GLOB_DAT = 1025, R_JUMP_SLOT = 1026, R_RELATIVE = 1027,
-    R_TLS_DTPMOD = 1028, R_TLS_TPREL = 1030, R_TLSDESC = 1031, R_IRELATIVE = 1032,
+    R_TLS_DTPMOD = 1028, R_TLS_DTPREL = 1029, R_TLS_TPREL = 1030, R_TLSDESC = 1031, R_IRELATIVE = 1032,
     STB_WEAK_ = 2, STT_TLS_ = 6, STT_GNU_IFUNC_ = 10, SHN_UNDEF_ = 0,
     PF_X_ = 1, PF_W_ = 2, PF_R_ = 4, EM_AARCH64_ = 183,
 };
@@ -62,8 +62,9 @@ struct tl_lib {
     uint64_t strtab, strsz, symtab, gnu_hash, sysv_hash;
     uint64_t rela, relasz, jmprel, pltrelsz, arela, arelasz, relr, relrsz;
     uint64_t init, init_array, init_arraysz;
-    uint32_t nsyms;
-    uint64_t *symcache;            /* resolved import per symbol index; 0 = not yet */
+    uint32_t nsyms;                /* the symbols the hash table covers */
+    uint32_t ncache;               /* an upper bound on the table: relocations name imports that the hash table does not cover */
+    uint64_t *symcache;            /* resolved import per symbol index (ncache of them); 0 = not yet */
 
     uint64_t needed[MAX_DEPS];
     int nneeded;
@@ -78,6 +79,9 @@ struct tl_lib {
 
     struct { uint64_t start, end; } code[16];   /* executable sections, as vaddrs: the only places instructions are patched */
     int ncode;
+    int tls_id;                    /* 1-based number of this library's thread-local storage template, 0 if it has none */
+    uint64_t *fde_start, *fde_end; size_t nfde;   /* the address ranges of the functions the unwind tables describe, sorted; none if the library has no tables */
+    size_t n_x18_data;             /* words naming x18 that lie outside every function: constant tables inside .text, left alone */
     size_t n_ctr;                  /* reads of CTR_EL0 replaced by a constant */
     size_t n_svc_far, n_adr_failed;   /* svc sites with no stub in branch range (answered ENOSYS), adr sites that could not be rewritten */
     size_t n_x18, n_x18_failed;    /* sites rewritten for the reserved register, and sites that could not be */
@@ -121,6 +125,28 @@ bool tl_ld_add_apk(const char *path)
 }
 
 const tl_zip *tl_ld_apk_at(int i) { return (i >= 0 && i < G.napks) ? &G.apks[i] : NULL; }
+
+/* Every arm64 library the APKs carry, by file name and size: a game that links SDL into its own library names no SDL library to look for. */
+int tl_ld_apk_libs(void (*cb)(const char *name, uint64_t size, void *user), void *user)
+{
+    int n = 0;
+    for (int i = 0; i < G.napks; i++)
+        for (size_t k = 0; k < G.apks[i].count; k++) {
+            const char *nm = G.apks[i].entries[k].name;
+            size_t l = strlen(nm);
+            if (strncmp(nm, "lib/arm64-v8a/", 14) || l < 18 || strcmp(nm + l - 3, ".so") || strchr(nm + 14, '/')) continue;
+            cb(nm + 14, G.apks[i].entries[k].usize, user); n++;
+        }
+    return n;
+}
+
+bool tl_ld_has_lib(const char *name)
+{
+    char path[160];
+    snprintf(path, sizeof(path), "lib/arm64-v8a/%s", name);
+    for (int i = 0; i < G.napks; i++) if (tl_zip_find(&G.apks[i], path)) return true;
+    return false;
+}
 
 static bool fetch_from_apks(const char *name, uint8_t **out, size_t *len)
 {
@@ -243,6 +269,21 @@ static uint32_t count_dynsyms(const tl_lib *L)
     return last + 1;
 }
 
+/*
+ * How long the dynamic symbol table can be. The hash tables cover the symbols that are defined here, and a linker may put the imports after them
+ * (libEOSSDK does: its relocations name symbols 813 and up of a table the hash counts as 813 long), so the count is the larger of that and the
+ * distance to whichever table follows the symbols in the file.
+ */
+static uint32_t dynsym_bound(const tl_lib *L, uint32_t hashed)
+{
+    uint64_t next = ~0ull;
+    const uint64_t after[] = { L->strtab, L->gnu_hash, L->sysv_hash, L->rela, L->jmprel, L->arela, L->relr };
+    for (size_t i = 0; i < sizeof(after) / sizeof(after[0]); i++) if (after[i] > L->symtab && after[i] < next) next = after[i];
+    uint32_t n = hashed;
+    if (L->symtab && next != ~0ull) { uint64_t m = (next - L->symtab) / sizeof(elf_sym); if (m > n && m < (1u << 24)) n = (uint32_t)m; }
+    return n;
+}
+
 /* ----------------------------------------------------- lookup by scope */
 
 static tl_lib *find_loaded(const char *name)
@@ -279,9 +320,19 @@ static void build_scope(tl_lib *L)
 }
 
 /* Symbol lookup the way a library sees it: its own scope, then the system. */
+/* Functions a driver puts in front of whatever the libraries define: an import of one of these names is bound to the replacement, which can still call the original. */
+#define MAX_INTERPOSE 8
+static struct { char name[48]; void *fn; } g_interpose[MAX_INTERPOSE];
+static int g_ninterpose;
+void tl_ld_interpose(const char *name, void *fn)
+{
+    if (g_ninterpose < MAX_INTERPOSE) { snprintf(g_interpose[g_ninterpose].name, sizeof(g_interpose[0].name), "%s", name); g_interpose[g_ninterpose++].fn = fn; }
+}
+
 static void *lookup_for(tl_lib *L, const char *name, bool *weak_hit)
 {
     (void)weak_hit;
+    for (int i = 0; i < g_ninterpose; i++) if (!strcmp(g_interpose[i].name, name)) return g_interpose[i].fn;
     build_scope(L);
     const elf_sym *s = lib_find(L, name);
     if (s && (s->st_info & 0xf) != STT_GNU_IFUNC_) return sym_value(L, s);
@@ -819,6 +870,16 @@ static int x18_rewrite(tl_lib *L, uint32_t *site_rw, const uint8_t *pc, ptrdiff_
     return X18_DONE;
 }
 
+static uint8_t *build_data_map(const tl_lib *L, const uint32_t *w, size_t n, uint64_t vstart, size_t *n_data);   /* below, with the unwind tables it reads */
+
+/* The cheap test x18_rewrite starts with, and what it would go on to decide: whether this word is an instruction that names x18. */
+static bool x18_rewrite_would_apply(uint32_t insn)
+{
+    if ((insn & 31u) != 18 && ((insn >> 5) & 31u) != 18 && ((insn >> 10) & 31u) != 18 && ((insn >> 16) & 31u) != 18) return false;
+    bool known;
+    return a64_uses_gpr(insn, 18, &known);
+}
+
 /* --------------------------------------------------------------- patching */
 
 #if defined(__aarch64__)
@@ -853,10 +914,25 @@ static void patch_image(tl_lib *L, size_t *n_tpidr, size_t *n_adrp, size_t *n_ad
         uint32_t *w = (uint32_t *)(L->rw + (L->code[r].start - L->base_vaddr));
         const uint8_t *x = L->rx + (L->code[r].start - L->base_vaddr);
         size_t nwords = (size_t)((L->code[r].end - L->code[r].start) / 4);
+        size_t ndata;
+        uint8_t *dmap = build_data_map(L, w, nwords, L->code[r].start, &ndata);
         for (size_t i = 0; i < nwords; i++) {
             uint32_t insn = w[i];
             const uint8_t *pc = x + i * 4;
-            int xr = x18_rewrite(L, &w[i], pc, delta);
+            /* a constant in the code section is not an instruction that happens to name x18 */
+            /* Only the x18 rewrite is held back: it matches a word on a handful of ordinary bit fields, and a quarter of a constant table does. The
+             * others (adrp, adr, mrs, svc) match fixed patterns that a constant almost never has, and the code beside a table needs them. */
+            bool is_data = dmap && ((dmap[i >> 3] >> (i & 7)) & 1);
+            /* TL_X18_RANGE=<lo>-<hi> (hex vaddrs) or TL_X18_OFF: rewrite fewer sites, to find one that is mishandled. A Mac does not clear x18, so leaving it is safe to test with. */
+            static int dbg = -1; static uint64_t dbg_lo, dbg_hi;
+            if (dbg < 0) { const char *e = getenv("TL_X18_RANGE"); dbg = getenv("TL_X18_OFF") ? 1 : 0; if (e) { dbg = 2; sscanf(e, "%llx-%llx", (unsigned long long *)&dbg_lo, (unsigned long long *)&dbg_hi); } }
+            uint64_t va = L->code[r].start + (uint64_t)i * 4;
+            bool skip_dbg = dbg == 1 || (dbg == 2 && !(va >= dbg_lo && va < dbg_hi));
+            int xr = (is_data || skip_dbg) ? X18_NONE : x18_rewrite(L, &w[i], pc, delta);
+            if (is_data && x18_rewrite_would_apply(insn)) {
+                L->n_x18_data++;
+                if (G.verbosity >= 3) tl_log_line("ld: %s: x18 word %08x at +%#llx left alone", L->name, insn, (unsigned long long)(L->code[r].start + (uint64_t)i * 4));
+            }
             if (xr == X18_DONE) { L->n_x18++; continue; }
             if (xr == X18_FAILED) { L->n_x18_failed++; continue; }
             if ((insn & 0xFFFFFFE0u) == 0xD53B0020u) {            /* mrs Xt, ctr_el0: privileged for user code on Apple silicon */
@@ -904,10 +980,92 @@ static void patch_image(tl_lib *L, size_t *n_tpidr, size_t *n_adrp, size_t *n_ad
                 }
             }
         }
+        free(dmap);
     }
 }
 #else
 static void patch_image(tl_lib *L, size_t *a, size_t *b, size_t *c, size_t *d) { (void)L; *a = *b = *c = *d = 0; }
+#endif
+
+
+/* ------------------------------------------------------- thread-local storage */
+
+/*
+ * A library's PT_TLS segment is a template for a block every thread has its own copy of. Android code reaches its thread-local variables in
+ * one of two ways that matter here: through a "TLS descriptor" (the newer, and what libUE4 uses) or through __tls_get_addr(module, offset). Both end
+ * in the same place -- a per-thread block for the library, allocated and filled from the template the first time a thread asks.
+ *
+ * A descriptor is a pair in the library's GOT: a function to call and an argument. The code calls the function with the descriptor's address and
+ * expects the variable's offset from the thread pointer, which it adds to the thread pointer (`mrs x1, tpidr_el0`) itself. Here that register is read as a
+ * fixed address (see the tpidr patch), so the function answers with the distance from that fixed address to this thread's copy of the variable. It is called
+ * where the compiler expects an ordinary instruction, so it must leave every register but x0 and x1 as it found them -- hence the assembly.
+ */
+#define MAX_TLS_MODULES 16
+static struct { tl_lib *lib; uint64_t init_vaddr, filesz, memsz, align; } g_tlsmod[MAX_TLS_MODULES + 1];
+static int g_ntls;
+static pthread_key_t g_tls_key;
+static pthread_once_t g_tls_once = PTHREAD_ONCE_INIT;
+
+typedef struct { void *blk[MAX_TLS_MODULES + 1]; } tls_thread;
+static void tls_thread_free(void *p) { tls_thread *t = p; for (int i = 0; i <= MAX_TLS_MODULES; i++) free(t->blk[i]); free(t); }
+static void tls_key_init(void) { pthread_key_create(&g_tls_key, tls_thread_free); }
+
+static void *tls_block(unsigned module)
+{
+    pthread_once(&g_tls_once, tls_key_init);
+    if (module == 0 || module > (unsigned)g_ntls) return NULL;
+    tls_thread *t = pthread_getspecific(g_tls_key);
+    if (!t) { t = calloc(1, sizeof(*t)); pthread_setspecific(g_tls_key, t); }
+    if (!t->blk[module]) {
+        uint64_t al = g_tlsmod[module].align < 16 ? 16 : g_tlsmod[module].align;
+        void *b = NULL;
+        if (posix_memalign(&b, (size_t)al, (size_t)(g_tlsmod[module].memsz + 16)) != 0) return NULL;
+        memset(b, 0, (size_t)g_tlsmod[module].memsz);
+        const tl_lib *L = g_tlsmod[module].lib;
+        if (g_tlsmod[module].filesz) memcpy(b, L->rx + (g_tlsmod[module].init_vaddr - L->base_vaddr), (size_t)g_tlsmod[module].filesz);
+        t->blk[module] = b;
+    }
+    return t->blk[module];
+}
+
+void *tl_ld_tls_get_addr(uint64_t module, uint64_t offset)
+{
+    uint8_t *b = tls_block((unsigned)module);
+    return b ? b + offset : NULL;
+}
+
+/* arg is the descriptor's second word: the module in the high half, the variable's offset in its template in the low. */
+__attribute__((used)) uint64_t tl_tls_offset(uint64_t arg)
+{
+    uint8_t *b = tls_block((unsigned)(arg >> 32));
+    uintptr_t tp = (uintptr_t)G.tcb_rw & ~(uintptr_t)0xFFF;                 /* what `mrs xN, tpidr_el0` was turned into */
+    return (uint64_t)((uintptr_t)(b ? b : (uint8_t *)tp) + (uint32_t)arg - tp);
+}
+
+#if defined(__aarch64__)
+__attribute__((naked, used)) static void tl_tlsdesc_entry(void)
+{
+    __asm__ volatile(
+        "stp x29, x30, [sp, #-16]!\n"
+        "sub sp, sp, #512\n"
+        "stp x2, x3,   [sp, #0]\n"   "stp x4, x5,   [sp, #16]\n"  "stp x6, x7,   [sp, #32]\n"  "stp x8, x9,   [sp, #48]\n"
+        "stp x10, x11, [sp, #64]\n"  "stp x12, x13, [sp, #80]\n"  "stp x14, x15, [sp, #96]\n"  "stp x16, x17, [sp, #112]\n"
+        "stp q0, q1,   [sp, #128]\n" "stp q2, q3,   [sp, #160]\n" "stp q4, q5,   [sp, #192]\n" "stp q6, q7,   [sp, #224]\n"
+        "stp q16, q17, [sp, #256]\n" "stp q18, q19, [sp, #288]\n" "stp q20, q21, [sp, #320]\n" "stp q22, q23, [sp, #352]\n"
+        "stp q24, q25, [sp, #384]\n" "stp q26, q27, [sp, #416]\n" "stp q28, q29, [sp, #448]\n" "stp q30, q31, [sp, #480]\n"
+        "ldr x0, [x0, #8]\n"
+        "bl _tl_tls_offset\n"
+        "ldp x2, x3,   [sp, #0]\n"   "ldp x4, x5,   [sp, #16]\n"  "ldp x6, x7,   [sp, #32]\n"  "ldp x8, x9,   [sp, #48]\n"
+        "ldp x10, x11, [sp, #64]\n"  "ldp x12, x13, [sp, #80]\n"  "ldp x14, x15, [sp, #96]\n"  "ldp x16, x17, [sp, #112]\n"
+        "ldp q0, q1,   [sp, #128]\n" "ldp q2, q3,   [sp, #160]\n" "ldp q4, q5,   [sp, #192]\n" "ldp q6, q7,   [sp, #224]\n"
+        "ldp q16, q17, [sp, #256]\n" "ldp q18, q19, [sp, #288]\n" "ldp q20, q21, [sp, #320]\n" "ldp q22, q23, [sp, #352]\n"
+        "ldp q24, q25, [sp, #384]\n" "ldp q26, q27, [sp, #416]\n" "ldp q28, q29, [sp, #448]\n" "ldp q30, q31, [sp, #480]\n"
+        "add sp, sp, #512\n"
+        "ldp x29, x30, [sp], #16\n"
+        "ret\n");
+}
+#else
+static void tl_tlsdesc_entry(void) {}
 #endif
 
 /* -------------------------------------------------------------- relocation */
@@ -925,7 +1083,8 @@ static uint64_t image_addr(const tl_lib *L, uint64_t vaddr)
 
 static uint64_t bind_symbol(tl_lib *L, uint32_t symidx, bool *failed)
 {
-    if (L->symcache && L->symcache[symidx]) return L->symcache[symidx];
+    bool cached = L->symcache && symidx < L->ncache;
+    if (cached && L->symcache[symidx]) return L->symcache[symidx];
     const elf_sym *s = sym_at(L, symidx);
     const char *name = sym_name(L, s);
     uint64_t val = 0;
@@ -950,7 +1109,7 @@ static uint64_t bind_symbol(tl_lib *L, uint32_t symidx, bool *failed)
             if (G.verbosity >= 2) tl_log_line("ld: %s: unresolved import %s", L->name, name);
         }
     }
-    if (L->symcache) L->symcache[symidx] = val ? val : 1;   /* 1 marks a resolved NULL */
+    if (cached) L->symcache[symidx] = val ? val : 1;   /* 1 marks a resolved NULL */
     return val;
 }
 
@@ -980,8 +1139,27 @@ static bool reloc_one(tl_lib *L, uint64_t r_offset, uint32_t type, uint32_t symi
         *place = resolver();
         return true;
     }
-    case R_TLS_DTPMOD: case R_TLS_TPREL: case R_TLSDESC:
-        tl_log_line("ld: %s: TLS relocation (type %u) -- thread-local storage is not implemented", L->name, type);
+    case R_TLSDESC: case R_TLS_DTPMOD: case R_TLS_DTPREL: {
+        uint64_t symoff = 0;
+        if (symidx) {
+            const elf_sym *ts = sym_at(L, symidx);
+            if (ts->st_shndx == SHN_UNDEF_) { tl_log_line("ld: %s: a thread-local variable of another library (%s) is not supported", L->name, sym_name(L, ts)); return false; }
+            symoff = ts->st_value;
+        }
+        if (!L->tls_id) { tl_log_line("ld: %s: a TLS relocation but no TLS segment", L->name); return false; }
+        if (type == R_TLSDESC) {
+            if (off + 16 > L->npages * PAGE) return false;
+            place[0] = (uint64_t)(uintptr_t)&tl_tlsdesc_entry;
+            place[1] = ((uint64_t)L->tls_id << 32) | (uint32_t)(symoff + (uint64_t)addend);
+        } else if (type == R_TLS_DTPMOD) {
+            *place = (uint64_t)L->tls_id;
+        } else {
+            *place = symoff + (uint64_t)addend;
+        }
+        return true;
+    }
+    case R_TLS_TPREL:
+        tl_log_line("ld: %s: an initial-exec TLS relocation (type %u) is not supported", L->name, type);
         return false;
     default:
         tl_log_line("ld: %s: unsupported relocation type %u", L->name, type);
@@ -1122,6 +1300,198 @@ static bool ensure_tcb(void)
     return true;
 }
 
+
+/* ------------------------------------------------------------------ unwind ranges */
+
+/*
+ * Which words of the executable sections are code. Assembly files put their constant tables in .text (OpenSSL's SHA-256 and SHA-512 keep
+ * theirs right after the function), and a table word that happens to name x18 -- one constant in 40 does -- would be "rewritten" into a branch to
+ * a stub, which turns the constant into garbage and the hash into a wrong answer. The unwind tables list the extent of every function the
+ * compiler emitted, which is exactly the code; a word outside all of them is data, and the rewrites that only code deserves leave it alone.
+ * A library with no unwind tables, or tables this cannot read, is treated as code throughout, as before.
+ */
+static bool read_enc(const uint8_t *p, const uint8_t *end, uint8_t enc, uint64_t field_vaddr, int64_t *out, size_t *size)
+{
+    int64_t v = 0; size_t n;
+    switch (enc & 0x0F) {
+    case 0x00: case 0x04: case 0x0C: n = 8; if (p + n > end) return false; memcpy(&v, p, 8); break;
+    case 0x02: n = 2; if (p + n > end) return false; { uint16_t t; memcpy(&t, p, 2); v = t; } break;
+    case 0x0A: n = 2; if (p + n > end) return false; { int16_t t; memcpy(&t, p, 2); v = t; } break;
+    case 0x03: n = 4; if (p + n > end) return false; { uint32_t t; memcpy(&t, p, 4); v = t; } break;
+    case 0x0B: n = 4; if (p + n > end) return false; { int32_t t; memcpy(&t, p, 4); v = t; } break;
+    default: return false;
+    }
+    if ((enc & 0x70) == 0x10) v += (int64_t)field_vaddr;          /* pc-relative; the others (absolute, or relative to the table) do not occur for an FDE's range */
+    else if ((enc & 0x70) != 0x00) return false;
+    *out = v; *size = n;
+    return true;
+}
+static bool uleb(const uint8_t **p, const uint8_t *end, uint64_t *v)
+{
+    uint64_t r = 0; int sh = 0;
+    while (*p < end) { uint8_t b = *(*p)++; r |= (uint64_t)(b & 0x7F) << sh; sh += 7; if (!(b & 0x80)) { *v = r; return true; } if (sh > 63) return false; }
+    return false;
+}
+typedef struct { uint64_t s, e; } fde_range;
+static int cmp_range(const void *a, const void *b) { const fde_range *x = a, *y = b; return x->s < y->s ? -1 : x->s > y->s; }
+
+/* The encoding a CIE says its FDEs use for the address of the function (the 'R' augmentation); false if the record cannot be read. */
+static bool cie_fde_encoding(const uint8_t *cie, const uint8_t *end, uint8_t *enc)
+{
+    if (cie + 12 > end) return false;
+    uint32_t len; memcpy(&len, cie, 4);
+    const uint8_t *rec_end = cie + 4 + len;
+    if (len == 0 || len == 0xFFFFFFFFu || rec_end > end) return false;
+    const uint8_t *q = cie + 8;                               /* past the length and the zero id */
+    uint8_t version = *q++;
+    const char *aug = (const char *)q;
+    while (q < rec_end && *q) q++;
+    if (q >= rec_end) return false;
+    q++;
+    uint64_t t;
+    if (!uleb(&q, rec_end, &t) || !uleb(&q, rec_end, &t)) return false;          /* code and data alignment */
+    if (version == 1) q++; else if (!uleb(&q, rec_end, &t)) return false;         /* the return address register */
+    uint8_t fenc = 0;
+    if (aug[0] == 'z') {
+        uint64_t alen; if (!uleb(&q, rec_end, &alen)) return false;
+        const uint8_t *aend = q + alen;
+        for (const char *a = aug + 1; *a && q < aend; a++) {
+            if (*a == 'R') fenc = *q++;
+            else if (*a == 'L') q++;
+            else if (*a == 'P') { uint8_t penc = *q++; int64_t dummy; size_t psz; if (!read_enc(q, aend, (uint8_t)(penc & 0x0F), 0, &dummy, &psz)) return false; q += psz; }
+            else if (*a == 'S' || *a == 'B') { /* no data */ }
+            else break;
+        }
+    }
+    *enc = fenc;
+    return true;
+}
+
+static void load_unwind_ranges(tl_lib *L, const uint8_t *file, size_t flen, const elf_phdr *phs, unsigned phnum)
+{
+    const uint32_t PT_EH = 0x6474e550u;
+    size_t hdr_off = (size_t)-1; uint64_t hdr_vaddr = 0;
+    for (unsigned i = 0; i < phnum; i++) if (phs[i].p_type == PT_EH) { hdr_off = (size_t)phs[i].p_offset; hdr_vaddr = phs[i].p_vaddr; }
+    if (hdr_off == (size_t)-1 || hdr_off + 12 > flen) return;
+    const uint8_t *h = file + hdr_off, *fend = file + flen;
+    const char *why = "unsupported .eh_frame_hdr";
+    fde_range *r = NULL;
+    if (h[0] != 1 || h[2] == 0xFF || h[3] != 0x3B) goto fail;                   /* version 1, a count, a table of datarel sdata4 pairs */
+    {
+        int64_t ehf, count; size_t s1, s2;
+        if (!read_enc(h + 4, fend, h[1], hdr_vaddr + 4, &ehf, &s1) || !read_enc(h + 4 + s1, fend, h[2], 0, &count, &s2)) goto fail;
+        const uint8_t *tbl = h + 4 + s1 + s2;
+        if (count <= 0 || tbl + (size_t)count * 8 > fend) { why = "the FDE table does not fit the file"; goto fail; }
+        r = malloc((size_t)count * sizeof(*r));
+        size_t n = 0;
+        uint64_t last_cie = (uint64_t)-1; uint8_t last_enc = 0;
+        for (int64_t i = 0; i < count; i++) {
+            int32_t start_rel, fde_rel;
+            memcpy(&start_rel, tbl + i * 8, 4); memcpy(&fde_rel, tbl + i * 8 + 4, 4);
+            uint64_t fde_vaddr = hdr_vaddr + (uint64_t)(int64_t)fde_rel;
+            size_t fde_off = (size_t)-1;
+            for (unsigned q = 0; q < phnum; q++)
+                if (phs[q].p_type == PT_LOAD_ && fde_vaddr >= phs[q].p_vaddr && fde_vaddr < phs[q].p_vaddr + phs[q].p_filesz) { fde_off = (size_t)(phs[q].p_offset + (fde_vaddr - phs[q].p_vaddr)); break; }
+            if (fde_off == (size_t)-1 || fde_off + 12 > flen) { why = "an FDE is outside the file"; goto fail; }
+            const uint8_t *fde = file + fde_off;
+            uint32_t len, cie_ptr; memcpy(&len, fde, 4); memcpy(&cie_ptr, fde + 4, 4);
+            if (len == 0 || len == 0xFFFFFFFFu || fde_off + 4 + len > flen || cie_ptr == 0 || fde_off + 4 < cie_ptr) { why = "an FDE record is malformed"; goto fail; }
+            size_t cie_off = fde_off + 4 - cie_ptr;
+            if (cie_off != last_cie) {
+                if (!cie_fde_encoding(file + cie_off, fend, &last_enc)) { why = "a CIE record cannot be read"; goto fail; }
+                last_cie = cie_off;
+            }
+            int64_t pc_begin, range; size_t sz1, sz2;
+            const uint8_t *fld = fde + 8;
+            if (!read_enc(fld, fde + 4 + len, last_enc, fde_vaddr + 8, &pc_begin, &sz1)) { why = "an FDE address encoding is not supported"; goto fail; }
+            if (!read_enc(fld + sz1, fde + 4 + len, (uint8_t)(last_enc & 0x0F), 0, &range, &sz2)) { why = "an FDE range encoding is not supported"; goto fail; }
+            r[n].s = (uint64_t)pc_begin; r[n].e = (uint64_t)pc_begin + (uint64_t)range; n++;
+        }
+        qsort(r, n, sizeof(*r), cmp_range);
+        L->fde_start = malloc(n * sizeof(uint64_t)); L->fde_end = malloc(n * sizeof(uint64_t));
+        for (size_t i = 0; i < n; i++) { L->fde_start[i] = r[i].s; L->fde_end[i] = r[i].e; }
+        L->nfde = n;
+        free(r);
+        return;
+    }
+fail:
+    if (G.verbosity >= 1) tl_log_line("ld:   %s: unwind tables not used (%s)", L->name, why);
+    free(r);
+}
+
+/*
+ * Which words of an executable range are data. A word inside a function the unwind tables know of is code, always. Elsewhere (a library built without
+ * unwind tables has long stretches of code there, as well as the constant tables assembly files keep in .text) it is data when it lies in a cluster
+ * of words that no instruction can have: a table of 32-bit constants is a quarter unallocated encodings, so any 17 words of it hold three or more such
+ * words, while compiled code holds none. A word within 8 of such a cluster is counted in it, which takes in the edges of the table. Returns a bitmap, one bit
+ * per word, or NULL when no word is data.
+ */
+static bool plausible_word(uint32_t w)
+{
+    if ((w >> 16) == 0) return true;                 /* udf: the zero padding between functions, and traps */
+    unsigned g = (w >> 25) & 0xF;                    /* op0 of the A64 encoding space: 0000 reserved, 0001 and 0011 unallocated, 0010 SVE */
+    return g > 3;
+}
+
+static uint8_t *build_data_map(const tl_lib *L, const uint32_t *w, size_t n, uint64_t vstart, size_t *n_data)
+{
+    *n_data = 0;
+    if (n < 32) return NULL;
+    uint8_t *bad = calloc((n + 7) / 8, 1), *hot = calloc((n + 7) / 8, 1), *data = calloc((n + 7) / 8, 1);
+    size_t j = 0; uint64_t max_end = 0;
+#define BIT(m, i) (((m)[(i) >> 3] >> ((i) & 7)) & 1)
+#define SETBIT(m, i) ((m)[(i) >> 3] |= (uint8_t)(1u << ((i) & 7)))
+    for (size_t i = 0; i < n; i++) {                 /* words that are neither inside a function nor an instruction */
+        uint64_t a = vstart + (uint64_t)i * 4;
+        while (j < L->nfde && L->fde_start[j] <= a) { if (L->fde_end[j] > max_end) max_end = L->fde_end[j]; j++; }
+        if (a < max_end) continue;
+        if (!plausible_word(w[i])) SETBIT(bad, i);
+    }
+    int sum = 0;                                     /* the window of 17 words around i */
+    for (size_t i = 0; i < 8 && i < n; i++) sum += BIT(bad, i);
+    for (size_t i = 0; i < n; i++) {
+        if (i + 8 < n) sum += BIT(bad, i + 8);
+        if (i >= 9) sum -= BIT(bad, i - 9);
+        if (sum >= 3 && BIT(bad, i)) SETBIT(hot, i);
+    }
+    /* A table is the run of words between the first and last such word, as long as they come within 64 of each other (in a table of constants three
+     * in four words are fine on their own, but a gap of 64 without a bad one has odds of one in 20 million); and 32 words either side, which is as far
+     * as the first words of a table can be from its first bad one with any likelihood. */
+    long last = -1;
+    for (size_t i = 0; i < n; i++) {
+        if (!BIT(hot, i)) continue;
+        size_t from = (last >= 0 && (long)i - last <= 64) ? (size_t)last : (i >= 32 ? i - 32 : 0);
+        for (size_t k = from; k <= i; k++) SETBIT(data, k);
+        for (size_t k = i + 1; k <= i + 32 && k < n; k++) SETBIT(data, k);
+        last = (long)i;
+    }
+    /* function bodies are never clusters of data, whatever sits beside them; and the words a PC-relative load reads are data wherever they are */
+    j = 0; max_end = 0;
+    uint8_t *incode = hot;                       /* reused: the cluster test is done with it */
+    memset(incode, 0, (n + 7) / 8);
+    for (size_t i = 0; i < n; i++) {
+        uint64_t a = vstart + (uint64_t)i * 4;
+        while (j < L->nfde && L->fde_start[j] <= a) { if (L->fde_end[j] > max_end) max_end = L->fde_end[j]; j++; }
+        if (a < max_end) { SETBIT(incode, i); data[i >> 3] &= (uint8_t)~(1u << (i & 7)); }
+    }
+    for (size_t i = 0; i < n; i++) {
+        uint32_t insn = w[i];
+        if ((insn & 0x3B000000u) != 0x18000000u) continue;                 /* ldr Rt, <literal> */
+        if (BIT(data, i) && !BIT(incode, i)) continue;                       /* a lookalike inside a table is not a load */
+        int64_t imm = (int64_t)((insn >> 5) & 0x7FFFFu); if (imm & 0x40000) imm -= 0x80000;
+        int64_t t = (int64_t)i + imm;
+        unsigned opc = insn >> 30, v = (insn >> 26) & 1;
+        unsigned nw = v ? (opc == 0 ? 1 : opc == 1 ? 2 : opc == 2 ? 4 : 0) : (opc == 1 ? 2 : opc == 3 ? 0 : 1);     /* words read: s/w and ldrsw 1, d/x 2, q 4; prfm none */
+        for (unsigned k = 0; k < nw; k++) if (t + k >= 0 && (size_t)(t + k) < n) SETBIT(data, (size_t)(t + k));
+    }
+    for (size_t i = 0; i < n; i++) if (BIT(data, i)) (*n_data)++;
+#undef BIT
+#undef SETBIT
+    free(bad); free(hot);
+    if (!*n_data) { free(data); return NULL; }
+    return data;
+}
+
 static tl_lib *map_library(const char *name, uint8_t *file, size_t flen)
 {
     if (G.nlibs >= MAX_LIBS) { tl_log_line("ld: too many libraries"); return NULL; }
@@ -1136,6 +1506,7 @@ static tl_lib *map_library(const char *name, uint8_t *file, size_t flen)
         return NULL;
     }
     tl_segment loads[16]; int nloads = 0; tl_segment relro = {0}; bool has_relro = false;
+    elf_phdr tls_seg = {0}; bool has_tls = false;
     uint64_t dyn_v = 0, dyn_n = 0;
     elf_phdr *phs = malloc((size_t)eh->e_phnum * sizeof(elf_phdr));
     if (!phs) return NULL;
@@ -1150,9 +1521,7 @@ static tl_lib *map_library(const char *name, uint8_t *file, size_t flen)
         } else if (p->p_type == PT_DYNAMIC_) {
             dyn_v = p->p_vaddr; dyn_n = p->p_filesz;
         } else if (p->p_type == PT_TLS_) {
-            tl_log_line("ld: %s has a PT_TLS segment -- thread-local storage is not implemented", name);
-            free(phs);
-            return NULL;
+            tls_seg = *p; has_tls = true;
         }
     }
     if (!nloads || !dyn_n) { tl_log_line("ld: %s has no loadable or dynamic segments", name); free(phs); return NULL; }
@@ -1234,6 +1603,13 @@ static tl_lib *map_library(const char *name, uint8_t *file, size_t flen)
     snprintf(L->name, sizeof(L->name), "%s", name);
     L->rx = rx; L->rw = rw; L->base_vaddr = base_vaddr; L->npages = npages; L->pflags = flags;
     L->phdr = phs; L->phnum = eh->e_phnum;
+    load_unwind_ranges(L, file, flen, phs, eh->e_phnum);
+    if (has_tls) {
+        if (g_ntls >= MAX_TLS_MODULES) { tl_log_line("ld: %s: too many libraries with thread-local storage", name); return NULL; }
+        L->tls_id = ++g_ntls;
+        g_tlsmod[L->tls_id].lib = L; g_tlsmod[L->tls_id].init_vaddr = tls_seg.p_vaddr; g_tlsmod[L->tls_id].filesz = tls_seg.p_filesz;
+        g_tlsmod[L->tls_id].memsz = tls_seg.p_memsz; g_tlsmod[L->tls_id].align = tls_seg.p_align;
+    }
     for (int r = 0; r < ncode; r++) { L->code[r].start = code[r].vaddr; L->code[r].end = code[r].vaddr + code[r].size; }
     L->ncode = ncode;
     L->stub_rx = rx + npages * PAGE; L->stub_rw = rw + npages * PAGE; L->stub_used = 16; L->stub_cap = nstub * PAGE; L->nstub = nstub;
@@ -1247,7 +1623,8 @@ static tl_lib *map_library(const char *name, uint8_t *file, size_t flen)
     }
     if (!L->soname[0]) snprintf(L->soname, sizeof(L->soname), "%s", name);
     L->nsyms = count_dynsyms(L);
-    if (L->nsyms) L->symcache = calloc(L->nsyms, sizeof(uint64_t));
+    L->ncache = dynsym_bound(L, L->nsyms);
+    if (L->ncache) L->symcache = calloc(L->ncache, sizeof(uint64_t));
     G.libs[G.nlibs++] = L;
     return L;
 }
@@ -1292,6 +1669,7 @@ static bool relocate(tl_lib *L)
         if (sv) tl_log_line("ld:   %s: %zu raw system-call sites rewritten", L->name, sv);
         if (L->n_x18 || L->n_x18_failed) tl_log_line("ld:   %s: %zu instructions using x18 rewritten for the virtual register%s", L->name, L->n_x18,
                                                      L->n_x18_failed ? " (and some that could not be)" : "");
+        if (L->n_x18_data) tl_log_line("ld:   %s: %zu words that look like x18 instructions left alone: they are constants outside every function", L->name, L->n_x18_data);
     }
     return true;
 }

@@ -18,6 +18,9 @@ struct BootScreen: View {
     @State private var phrase = 0
     @State private var began = Date()
     @State private var now = Date()
+    @State private var pulse = false
+    /// When bootProgress last moved, so the bar can creep between milestones.
+    @State private var lastStep = Date()
 
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     private let rotate = Timer.publish(every: 3.4, on: .main, in: .common).autoconnect()
@@ -26,9 +29,18 @@ struct BootScreen: View {
     /// looking at the screen, and the jokes should not repeat before the
     /// information does.
     private static let phrases = [
-        "يُستعاد الجهاز المحفوظ إن كان متاحًا.",
-        "الإقلاع الأول قد يستغرق عدة دقائق.",
-        "تقدر تتصفح مكتبتك أثناء التشغيل.",
+        "Prepare for awesomeness",
+        "Waking Android up",
+        "Teaching an iPhone to speak Android",
+        "This is a whole operating system — be patient",
+        "App by Levi",
+        "Star the repo if you like this sort of thing",
+        "Translating arm64, one block at a time",
+        "No, it has not frozen",
+        "Unpacking the guest",
+        "Almost worth the wait",
+        "Negotiating with the JIT",
+        "Nearly there",
     ]
 
     var body: some View {
@@ -39,15 +51,18 @@ struct BootScreen: View {
                 Spacer()
 
                 HuskMark(size: 96)
+                    .shadow(color: Theme.accent.opacity(pulse ? 0.45 : 0.15),
+                            radius: pulse ? 34 : 18, y: 10)
+                    .animation(.easeInOut(duration: 1.8).repeatForever(autoreverses: true),
+                               value: pulse)
+                    .onAppear { pulse = true }
 
-                Text("ios app")
-                    .font(.system(size: 32, weight: .bold))
-                    .tracking(-0.5)
+                Text("HUSK")
+                    .font(.system(size: 22, weight: .semibold))
+                    .tracking(9)
                     .foregroundStyle(Theme.text)
+                    .padding(.leading, 9)
                     .padding(.top, 18)
-                Text("نجهّز مساحتك")
-                    .font(.title3.weight(.medium))
-                    .padding(.top, 8)
 
                 // The line that talks. Keyed on the index so each one fades
                 // into the next rather than snapping.
@@ -78,7 +93,7 @@ struct BootScreen: View {
                 // An escape hatch, but not an invitation: it turns up only once
                 // waiting has stopped being novel.
                 if now.timeIntervalSince(began) > 8 {
-                    Button("تصفّح المكتبة أثناء التشغيل", action: onSkip)
+                    Button("Use Husk while it starts", action: onSkip)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(Theme.textDim)
                         .padding(.top, 14)
@@ -88,6 +103,7 @@ struct BootScreen: View {
             .padding(.bottom, 26)
         }
         .onReceive(tick) { now = $0 }
+        .onChange(of: runner.bootProgress) { _ in lastStep = Date() }
         .onReceive(rotate) { _ in
             withAnimation(.easeInOut(duration: 0.45)) { phrase += 1 }
         }
@@ -101,13 +117,13 @@ struct BootScreen: View {
                     Capsule().fill(Theme.surfaceHigh)
                     Capsule().fill(Theme.accent)
                         .frame(width: geo.size.width * fraction)
-                        .animation(.easeOut(duration: 0.25), value: fraction)
+                        .animation(.snappy(duration: 0.4), value: fraction)
                 }
             }
             .frame(height: 5)
 
             HStack {
-                Text(shown > 0 ? "\(shown)%" : "جارٍ البدء")
+                Text(shown > 0 ? "\(shown)%" : "starting")
                     .font(.technical(12, weight: .medium))
                     .foregroundStyle(Theme.accent)
                 Spacer()
@@ -121,17 +137,46 @@ struct BootScreen: View {
     }
 
     private var fraction: CGFloat {
-        CGFloat(shown) / 100
+        // Never zero: a bar with nothing in it reads as stuck rather than as
+        // early, and the guest says nothing at all for the first few seconds.
+        max(CGFloat(shown) / 100, 0.03)
     }
 
-    /// Only observed boot milestones, never fabricated time-based progress.
+    /// Progress as shown. The real number only moves when a milestone line appears,
+    /// and late in a cold boot those are minutes apart. In between, the bar gains 1%
+    /// every 30 seconds. It stops one short of the next milestone and never passes 95%,
+    /// so it can never claim more progress than the guest has made.
     private var shown: Int {
-        max(0, min(runner.bootProgress, 100))
+        let real = runner.bootProgress
+        guard real > 0, real < 100, !QemuRunner.didRestore else { return real }
+        let next = QemuRunner.bootMilestones.map { $0.2 }.first { $0 > real } ?? 100
+        let creep = Int(now.timeIntervalSince(lastStep) / 30)
+        return max(real, min(real + creep, next - 1, 95))
     }
 
-    /// Elapsed time, not an unverified promise about how long is left.
+    /// An estimate from this boot's own pace, not from a number someone typed
+    /// in. Withheld until there is enough of a curve to divide by, and dropped
+    /// again near the end, where being wrong is most annoying.
     private var remaining: String? {
-        let elapsed = max(0, Int(now.timeIntervalSince(began)))
-        return elapsed < 60 ? "\(elapsed) ثانية" : "\(elapsed / 60) دقيقة"
+        let done = Double(runner.bootProgress)
+        // Past zygote the remaining time is mostly app compilation, and the early
+        // pace says nothing about it. The estimate kept promising "about a minute"
+        // for ten minutes, so show elapsed time instead.
+        if done >= 58, !QemuRunner.didRestore {
+            let mins = Int(now.timeIntervalSince(QemuRunner.bootStarted) / 60)
+            return mins < 1 ? "first boot takes 5–15 min"
+                            : "\(mins) min · first boot takes 5–15 min"
+        }
+        guard done >= 8, done <= 92 else { return nil }
+        let elapsed = now.timeIntervalSince(began)
+        guard elapsed > 6 else { return nil }
+        let total = elapsed / (done / 100)
+        let left = total - elapsed
+        guard left > 2, left < 15 * 60 else { return nil }
+        if left < 90 {
+            let rounded = Int((left / 5).rounded()) * 5
+            return "about \(max(rounded, 5)) seconds remaining"
+        }
+        return "about \(Int((left / 60).rounded())) minutes remaining"
     }
 }

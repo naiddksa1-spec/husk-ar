@@ -1,25 +1,32 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 import SwiftUI
 
+/// A page pushed onto the library: an Android app's, or a translation-layer game's page or its settings.
+enum LibraryRoute: Hashable {
+    case android(AndroidHost.Package)
+    case game(String)
+    case gameSettings(String)
+}
+
 /// Where the tabs and their stacks are steered from.
 ///
-/// One app can send you to another tab — an app's page offers to show its files
-/// — and a tab that is also a navigation stack cannot be pushed from outside
-/// itself without somewhere to keep the path. This is that somewhere.
+/// One app can send you somewhere else -- an app's page offers to show its files -- and a stack cannot be pushed
+/// from outside itself without somewhere to keep the path. This is that somewhere.
 @MainActor final class Router: ObservableObject {
     static let shared = Router()
 
     @Published var tab: HuskTab = .library
-    @Published var wantsGuestScreen = false
-    /// The app pages pushed on top of the library.
-    @Published var library: [AndroidHost.Package] = []
+    /// The pages pushed on top of the library.
+    @Published var library: [LibraryRoute] = []
+    /// Android's storage, as a sheet over whatever is showing.
+    @Published var showFiles = false
     /// Directories pushed on top of the Files root.
     @Published var files: [String] = []
 
-    /// Show a directory in the Files tab, from anywhere.
+    /// Show a directory of Android's storage, from anywhere.
     func openFiles(at path: String) {
         files = path == FilesTab.root ? [] : [path]
-        tab = .files
+        showFiles = true
     }
 }
 
@@ -39,32 +46,62 @@ struct AppDetailView: View {
     private var canOpen: Bool { host.isReady && host.busy == nil }
 
     var body: some View {
-        ZStack {
-            Theme.backdrop
-            ScrollView {
-                VStack(spacing: 18) {
-                    HuskHeader(back: { dismiss() }) { menu }
-                    header
-                    launch
-                    facts
-                    actions
+        List {
+            Section {
+                header
+                Button {
+                    host.launch(app.name) { onOpenGuest() }
+                } label: {
+                    HStack {
+                        Spacer()
+                        Label(canOpen ? "Launch" : "Starting Android…",
+                              systemImage: canOpen ? "play.fill" : "hourglass")
+                            .font(.headline)
+                        Spacer()
+                    }
                 }
-                .padding(.horizontal, 18)
-                .padding(.top, 4)
-                .padding(.bottom, 30)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(!canOpen)
+                .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+            } footer: {
+                if !host.isReady { Text("It opens as soon as Android answers.") }
+            }
+
+            Section {
+                LabeledContent("Version", value: live.version ?? "—")
+                LabeledContent("Size", value: live.sizeBytes.map(Self.bytes) ?? "—")
+                LabeledContent("Last Used", value: live.lastUsed.map(Self.when) ?? "Never from Husk")
+            }
+
+            Section {
+                Button { router.openFiles(at: "/sdcard/Android/data/\(app.name)") } label: {
+                    Label("Open in Files", systemImage: "folder")
+                }
+                Button { appInfo() } label: {
+                    Label("App Info", systemImage: "info.circle")
+                }
+                .disabled(!canOpen)
+                Button(role: .destructive) { confirmUninstall = true } label: {
+                    Label("Uninstall", systemImage: "trash")
+                }
+                .disabled(!canOpen)
             }
         }
-        .navigationBarHidden(true)
-        .confirmationDialog("إلغاء تثبيت \(live.label)؟", isPresented: $confirmUninstall,
+        .listStyle(.insetGrouped)
+        .navigationTitle(live.label)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItem(placement: .topBarTrailing) { menu } }
+        .confirmationDialog("Uninstall \(live.label)?", isPresented: $confirmUninstall,
                             titleVisibility: .visible) {
-            Button("إلغاء التثبيت", role: .destructive) {
+            Button("Uninstall", role: .destructive) {
                 host.uninstall(app.name)
                 dismiss()
             }
-            Button("إلغاء", role: .cancel) { }
+            Button("Cancel", role: .cancel) { }
         } message: {
-            Text("ستُحذف بياناته معه. احفظ أندرويد بعد ذلك، وإلا ضاع "
-               + "التغيير عند التشغيل التالي.")
+            Text("Its data goes with it. Save Android afterwards or the change is "
+               + "lost on the next launch.")
         }
     }
 
@@ -74,36 +111,31 @@ struct AppDetailView: View {
         Menu {
             Button {
                 UIPasteboard.general.string = app.name
-            } label: { Label("نسخ اسم الحزمة", systemImage: "doc.on.doc") }
+            } label: { Label("Copy Package Name", systemImage: "doc.on.doc") }
             Button { appInfo() } label: {
-                Label("العرض في إعدادات أندرويد", systemImage: "gearshape")
+                Label("Show in Android Settings", systemImage: "gearshape")
             }
             .disabled(!canOpen)
             Divider()
             Button(role: .destructive) { confirmUninstall = true } label: {
-                Label("إلغاء التثبيت", systemImage: "trash")
+                Label("Uninstall", systemImage: "trash")
             }
             .disabled(!canOpen)
         } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(Theme.text)
-                .frame(width: 36, height: 36)
-                .background(Theme.surfaceHigh, in: Circle())
+            Image(systemName: "ellipsis.circle")
         }
     }
 
     private var header: some View {
         HStack(alignment: .top, spacing: 16) {
-            AppIcon(path: live.iconPath, size: 72)
+            AppIcon(path: live.iconPath, size: 76)
             VStack(alignment: .leading, spacing: 6) {
                 Text(live.label)
-                    .font(.system(size: 26, weight: .bold))
-                    .foregroundStyle(Theme.text)
+                    .font(.title2.weight(.bold))
                     .lineLimit(2)
                 Text(live.name)
-                    .font(.system(size: 13))
-                    .foregroundStyle(Theme.textDim)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.middle)
                 HStack(spacing: 6) {
                     if let c = live.category { Tag(text: c) }
@@ -113,70 +145,7 @@ struct AppDetailView: View {
             }
             Spacer(minLength: 0)
         }
-    }
-
-    private var launch: some View {
-        VStack(spacing: 8) {
-            Button {
-                host.launch(app.name) { onOpenGuest() }
-            } label: {
-                Label(canOpen ? "تشغيل" : "جارٍ بدء أندرويد…",
-                      systemImage: canOpen ? "play.fill" : "hourglass")
-            }
-            .buttonStyle(PrimaryButtonStyle(enabled: canOpen))
-            .disabled(!canOpen)
-
-            if !host.isReady {
-                Text("سيُفتح فور استجابة أندرويد.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.textDim)
-            }
-        }
-    }
-
-    private var facts: some View {
-        RowGroup {
-            fact("الإصدار", live.version ?? "—")
-            RowDivider().padding(.leading, 14)
-            fact("الحجم", live.sizeBytes.map(Self.bytes) ?? "—")
-            RowDivider().padding(.leading, 14)
-            fact("آخر استخدام", live.lastUsed.map(Self.when) ?? "لم يُفتح من Husk بعد")
-        }
-    }
-
-    private func fact(_ label: String, _ value: String) -> some View {
-        HStack {
-            Text(label)
-                .font(.system(size: 15))
-                .foregroundStyle(Theme.textDim)
-            Spacer(minLength: 12)
-            Text(value)
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(Theme.text)
-        }
-        .padding(.horizontal, 14).padding(.vertical, 13)
-    }
-
-    private var actions: some View {
-        RowGroup {
-            Button { router.openFiles(at: "/sdcard/Android/data/\(app.name)") } label: {
-                HuskRow(systemImage: "folder", title: "فتح في الملفات")
-            }
-            .buttonStyle(.plain)
-            RowDivider()
-            Button { appInfo() } label: {
-                HuskRow(systemImage: "info.circle", title: "معلومات التطبيق")
-            }
-            .buttonStyle(.plain)
-            .disabled(!canOpen)
-            RowDivider()
-            Button { confirmUninstall = true } label: {
-                HuskRow(systemImage: "trash", title: "إلغاء التثبيت", tint: .red,
-                        showsChevron: false)
-            }
-            .buttonStyle(.plain)
-            .disabled(!canOpen)
-        }
+        .padding(.vertical, 4)
     }
 
     /// Android's own page for the app — permissions, storage, force stop. It
@@ -200,9 +169,9 @@ struct AppDetailView: View {
     static func when(_ date: Date) -> String {
         let f = DateFormatter()
         if Calendar.current.isDateInToday(date) {
-            f.dateFormat = "'اليوم،' h:mm a"
+            f.dateFormat = "'Today,' h:mm a"
         } else if Calendar.current.isDateInYesterday(date) {
-            f.dateFormat = "'أمس،' h:mm a"
+            f.dateFormat = "'Yesterday,' h:mm a"
         } else {
             f.dateStyle = .medium
             f.timeStyle = .none

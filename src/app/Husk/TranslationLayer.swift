@@ -3,31 +3,16 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-/// Experimental: Android apps without booting Android.
+/// Android apps without booting Android.
 ///
-/// Husk runs an APK by booting a whole Android system under QEMU and showing
-/// one app's surface. That works, and it costs a kernel, an init, a system
-/// server and minutes of emulated CPU before the first frame. Android
-/// Translation Layer, on Linux, shows the other way: keep only the app's own
-/// code -- its Dex and its native libraries -- and run it against a rewrite of
-/// the Android framework on the host itself, so there is nothing to boot.
-///
-/// Doing that on iOS is a long road, and docs/04-translation-layer.md is the
-/// map. What exists so far is the first stretch: apps can be added here and
-/// each gets a report of what running it would take, and the phone can be
-/// asked the questions the design rests on. Nothing opens an app yet, and
-/// nothing here changes how the rest of Husk runs.
+/// Husk runs an APK in one of two ways. It can boot a whole Android system under QEMU and show one app's surface:
+/// that runs anything, and costs a kernel, an init, a system server and minutes of emulated CPU before the first frame.
+/// Or -- this -- it can keep only the app's own code, its Dex and its native libraries, and run it against a rewrite of the
+/// Android framework on the phone itself, so there is nothing to boot. Games built on Unity, cocos2d-x, Minecraft's
+/// GameActivity and SDL3 start in seconds this way. docs/04-translation-layer.md is the design.
 enum TranslationLayer {
-    static let enabledKey = "husk.translationLayer"
-    static let trustKey = "ios-app.nativeRuntimeTrust"
-
-    static var isEnabled: Bool {
-        UserDefaults.standard.bool(forKey: enabledKey)
-            && UserDefaults.standard.bool(forKey: trustKey)
-    }
-
     /// Whether the technical detail is shown: library reports, device checks, logs. Off, the screens carry
-    /// only what is needed to add an app, switch the layer on and run it. Set in Settings > About.
+    /// only what is needed to add an app and run it. Set in Settings > About.
     static let devInfoKey = "husk.devInfo"
 
     /// One folder per app. Kept apart from Android's apps: those live on the
@@ -62,6 +47,10 @@ extension TLReport {
         if engine?.hasPrefix("Unity") == true { return .unity }
         if engine == "Cocos" { return .cocos }
         if engine == "Minecraft" { return .minecraft }
+        if engine == "SDL" { return .sdl }
+        if engine == "Unreal Engine" { return .ue4 }
+        if engine == "Rockstar" { return .gta }
+        if engine == "NativeActivity" { return .nativeactivity }
         return nil
     }
 
@@ -71,17 +60,18 @@ extension TLReport {
     var runsOnNativeRuntime: Bool { nativeEngine != nil }
 
     /// "Unity" or "Cocos2d-x", for words on screen.
-    var nativeEngineName: String { nativeEngine == .cocos ? "Cocos2d-x" : nativeEngine == .minecraft ? "Minecraft" : "Unity" }
+    var nativeEngineName: String { nativeEngine == .cocos ? "Cocos2d-x" : nativeEngine == .minecraft ? "Minecraft" : nativeEngine == .sdl ? "SDL" : nativeEngine == .ue4 ? "Unreal Engine" : nativeEngine == .gta ? "Rockstar" : nativeEngine == .nativeactivity ? "NativeActivity" : "Unity" }
 
     var displaySummary: String {
         guard runsOnNativeRuntime else { return summary }
         let flagged = libraries.filter { $0.abi == "arm64-v8a" && $0.status != "ok" }.count
         let total = libraries.filter { $0.abi == "arm64-v8a" }.count
-        var text = "لعبة \(nativeEngineName). تعمل عبر بيئة التشغيل الأصلية في Husk، التي تحمّل مكتباتها الـ \(total) من نوع arm64 بنفسها."
-        if nativeEngine == .cocos || nativeEngine == .minecraft { text += " إنها لعبة أفقية: Husk يدير الشاشة لأجلها." }
+        var text = "A \(nativeEngineName) game. It runs through Husk's native runtime, which loads its \(total) arm64 libraries itself."
+        if nativeEngine == .cocos || nativeEngine == .minecraft || nativeEngine == .ue4 || nativeEngine == .gta { text += " It is a landscape game: Husk turns the screen for it." }
+        else if nativeEngine == .sdl || nativeEngine == .nativeactivity { text += " Husk turns the screen the way the game asks for." }
         if flagged > 0 {
-            text += " \(flagged) منها تستخدم حيلًا لم يستطع المحمّل القديم التعامل معها؛ بيئة التشغيل الأصلية تتعامل معها أيضًا، "
-                  + "باستثناء كود الحماية من العبث الاختياري، الذي تتجاوزه."
+            text += " \(flagged) of them use tricks the older loader could not handle; the native runtime handles those too, "
+                  + "except for optional anti-tamper code, which it leaves out."
         }
         return text
     }
@@ -152,7 +142,23 @@ final class TranslationLayerStore: ObservableObject {
 
     private init() { reload() }
 
+    /// Which reading of an app's libraries its report came from. A newer Husk that recognises more (an engine, a kind of game) reads
+    /// the apps it already holds again, so they are not left with what the old one knew.
+    nonisolated static let scanVersion = 4
+    private var rescanning = false
+
     func reload() {
+        let dirs = (try? FileManager.default.contentsOfDirectory(
+            at: TranslationLayer.root, includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles])) ?? []
+        apps = dirs.compactMap(Self.load).sorted {
+            $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending
+        }
+        rescanStale()
+    }
+
+    /// The apps read again from disk, and nothing else started: after work that only changed what is on disk.
+    private func reloadQuietly() {
         let dirs = (try? FileManager.default.contentsOfDirectory(
             at: TranslationLayer.root, includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles])) ?? []
@@ -161,12 +167,60 @@ final class TranslationLayerStore: ObservableObject {
         }
     }
 
+    /// Icons are drawn again once per run of Husk at most: a newly added app already has the current kind.
+    private var iconsRefreshed = false
+
+    nonisolated private static func scanStamp(_ id: String) -> Int {
+        let url = TranslationLayer.root.appendingPathComponent(id, isDirectory: true).appendingPathComponent("scan-version.txt")
+        return (try? String(contentsOf: url, encoding: .utf8)).flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) } ?? 0
+    }
+
+    private func rescanStale() {
+        guard !rescanning else { return }
+        let stale = apps.filter { Self.scanStamp($0.id) != Self.scanVersion }
+        let icons = iconsRefreshed ? [] : apps
+        iconsRefreshed = true
+        if !icons.isEmpty { Task.detached(priority: .utility) {
+            var changed = false
+            for app in icons {
+                let before = app.iconPath.flatMap { try? FileManager.default.attributesOfItem(atPath: $0)[.modificationDate] as? Date }
+                Self.refreshIcon(app)
+                let path = TranslationLayer.root.appendingPathComponent(app.id).appendingPathComponent("icon.png").path
+                let after = try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date
+                if before != after { changed = true }
+            }
+            if changed { await MainActor.run { self.reloadQuietly() } }
+        } }
+        guard !stale.isEmpty else { return }
+        rescanning = true
+        HuskLog.log("tl", "reading \(stale.count) app(s) again with the newer scanner")
+        Task.detached(priority: .utility) {
+            for app in stale {
+                let dir = TranslationLayer.root.appendingPathComponent(app.id, isDirectory: true)
+                try? Data(Self.scan(app.apks).utf8).write(to: dir.appendingPathComponent("report.json"))
+                try? "\(Self.scanVersion)".write(to: dir.appendingPathComponent("scan-version.txt"), atomically: true, encoding: .utf8)
+            }
+            await MainActor.run {
+                self.rescanning = false
+                self.reload()
+            }
+        }
+    }
+
+    /// Call the app something else. The name Android gave it is only where it started.
+    func rename(_ app: TLApp, to name: String) {
+        let dir = TranslationLayer.root.appendingPathComponent(app.id, isDirectory: true)
+        try? name.write(to: dir.appendingPathComponent("label.txt"), atomically: true, encoding: .utf8)
+        HuskLog.log("tl", "renamed \(app.label) to \(name)")
+        reload()
+    }
+
     /// Keep a copy of one app -- one APK, or a base APK and its splits,
     /// picked together -- and report on it.
     func add(_ urls: [URL], move: Bool = false) {
         guard !urls.isEmpty, busy == nil else { return }
-        busy = urls.count == 1 ? "جارٍ إضافة \(urls[0].lastPathComponent)…"
-                               : "جارٍ إضافة \(urls.count) ملفات APK…"
+        busy = urls.count == 1 ? "Adding \(urls[0].lastPathComponent)…"
+                               : "Adding \(urls.count) APKs…"
         Task.detached(priority: .userInitiated) {
             let failure = Self.ingest(urls, move: move)
             await MainActor.run {
@@ -184,7 +238,7 @@ final class TranslationLayerStore: ObservableObject {
         guard busy == nil, let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
         let dropped = ((try? FileManager.default.contentsOfDirectory(at: docs, includingPropertiesForKeys: nil,
                                                                       options: [.skipsHiddenFiles])) ?? [])
-            .filter { $0.pathExtension.lowercased() == "apk" }
+            .filter { $0.pathExtension.lowercased() == "apk" || BundleUnpacker.extensions.contains($0.pathExtension.lowercased()) }
         guard let first = dropped.first else { return }
         HuskLog.log("tl", "adopting \(dropped.count) APK(s) found in the Husk folder")
         add([first], move: true)
@@ -222,7 +276,12 @@ final class TranslationLayerStore: ObservableObject {
     nonisolated private static func load(_ dir: URL) -> TLApp? {
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(atPath: dir.path) else { return nil }
-        let apks = files.filter { $0.lowercased().hasSuffix(".apk") }.sorted()
+        let apks = files.filter { $0.lowercased().hasSuffix(".apk") }
+            .sorted { a, b in
+                // The base first: it is the one a game is started from, and the others are its splits and packs.
+                let ra = BundleUnpacker.rank(a), rb = BundleUnpacker.rank(b)
+                return ra != rb ? ra < rb : a < b
+            }
             .map { dir.appendingPathComponent($0).path }
         guard let first = apks.first else { return nil }
 
@@ -249,6 +308,13 @@ final class TranslationLayerStore: ObservableObject {
                 // Security-scoped: the picker's URL is only readable inside this pair.
                 let scoped = url.startAccessingSecurityScopedResource()
                 defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                // A bundle (.xapk, .apkm, .apks) is a zip of an app's APKs: take them out, and do not keep the bundle itself.
+                if BundleUnpacker.extensions.contains(url.pathExtension.lowercased()) {
+                    let names = try BundleUnpacker.unpack(url, into: dir)
+                    HuskLog.log("tl", "unpacked \(url.lastPathComponent): \(names.joined(separator: ", "))")
+                    if move { try? fm.removeItem(at: url) }
+                    continue
+                }
                 var name = url.lastPathComponent
                 if !name.lowercased().hasSuffix(".apk") { name += ".apk" }
                 let dest = dir.appendingPathComponent(name)
@@ -268,7 +334,7 @@ final class TranslationLayerStore: ObservableObject {
         } catch {
             try? fm.removeItem(at: dir)
             HuskLog.log("tl", "FAILED to add: \(error.localizedDescription)")
-            return "تعذّر على Husk نسخه: \(error.localizedDescription)"
+            return "Husk could not copy it: \(error.localizedDescription)"
         }
 
         let apks = ((try? fm.contentsOfDirectory(atPath: dir.path)) ?? [])
@@ -277,6 +343,7 @@ final class TranslationLayerStore: ObservableObject {
         describe(apks, into: dir)
         let json = scan(apks)
         try? Data(json.utf8).write(to: dir.appendingPathComponent("report.json"))
+        try? "\(scanVersion)".write(to: dir.appendingPathComponent("scan-version.txt"), atomically: true, encoding: .utf8)
         HuskLog.log("tl", "report for \(dir.lastPathComponent): \(json)")
         return nil
     }
@@ -284,7 +351,11 @@ final class TranslationLayerStore: ObservableObject {
     /// The app's own name and icon, from its manifest and resource table --
     /// the same reading the library does for apps inside Android, done here on
     /// the file directly.
-    nonisolated private static func describe(_ apks: [String], into dir: URL) {
+    /// Which way of drawing icons an app's icon.png came from. A newer Husk that draws them better draws the apps it
+    /// already holds again (icons only: the name may be the user's own).
+    nonisolated static let iconVersion = 2
+
+    nonisolated private static func describe(_ apks: [String], into dir: URL, label wantLabel: Bool = true) {
         // The base APK carries the label and the icon; a config split's
         // manifest names neither. The base is usually called base.apk, and
         // otherwise usually the biggest.
@@ -303,31 +374,76 @@ final class TranslationLayerStore: ObservableObject {
             let info = ApkMetadata.read(manifest: manifest, resources: arsc)
             guard info.label != nil || info.iconEntry != nil else { continue }
 
-            if let label = info.label {
+            if wantLabel, let label = info.label {
                 try? label.write(to: dir.appendingPathComponent("label.txt"),
                                  atomically: true, encoding: .utf8)
             }
-            // An adaptive icon is an instruction, not a picture: follow it to
-            // the layer it draws in front.
-            var iconEntry = info.iconEntry
-            if let xml = iconEntry, xml.hasSuffix(".xml") {
-                iconEntry = nil
-                if let data = entry(apk, xml, limit: 4 << 20),
-                   let layer = ApkMetadata.adaptiveLayer(data),
-                   let bitmap = ApkMetadata.bitmap(for: layer, resources: arsc),
-                   !bitmap.hasSuffix(".xml") {
-                    iconEntry = bitmap
+            // Stored as PNG whatever it was, so the icon view needs no WebP.
+            var drawn = "?"
+            if let iconEntry = info.iconEntry {
+                if iconEntry.hasSuffix(".xml") {
+                    if let image = adaptiveIcon(apk, xml: iconEntry, resources: arsc), let png = image.pngData() {
+                        try? png.write(to: dir.appendingPathComponent("icon.png"))
+                        drawn = "\(iconEntry) (adaptive, composed)"
+                    }
+                } else if let data = entry(apk, iconEntry, limit: 16 << 20), let png = UIImage(data: data)?.pngData() {
+                    try? png.write(to: dir.appendingPathComponent("icon.png"))
+                    drawn = iconEntry
                 }
             }
-            // Stored as PNG whatever it was, so the icon view needs no WebP.
-            if let iconEntry, let data = entry(apk, iconEntry, limit: 16 << 20),
-               let png = UIImage(data: data)?.pngData() {
-                try? png.write(to: dir.appendingPathComponent("icon.png"))
-            }
+            try? "\(iconVersion)".write(to: dir.appendingPathComponent("icon-version.txt"), atomically: true, encoding: .utf8)
             HuskLog.log("tl", "\((apk as NSString).lastPathComponent): "
-                            + "label=\(info.label ?? "?") icon=\(iconEntry ?? "?")")
+                            + "label=\(info.label ?? "?") icon=\(drawn)")
             return
         }
+    }
+
+    /// An adaptive icon, drawn the way a launcher draws it: the background layer (a picture or a colour) under the
+    /// foreground, both on Android's 108-unit canvas, cut to the 72 units in the middle that a launcher shows. The
+    /// foreground alone -- what this used to keep -- is the app's mark floating on nothing.
+    nonisolated private static func adaptiveIcon(_ apk: String, xml: String, resources: Data) -> UIImage? {
+        guard let data = entry(apk, xml, limit: 4 << 20) else { return nil }
+        let layers = ApkMetadata.adaptiveLayers(data)
+        func picture(_ id: UInt32?) -> UIImage? {
+            guard let id, let path = ApkMetadata.bitmap(for: id, resources: resources), !path.hasSuffix(".xml"),
+                  let bytes = entry(apk, path, limit: 16 << 20) else { return nil }
+            return UIImage(data: bytes)
+        }
+        let fore = picture(layers.foreground)
+        let back = picture(layers.background)
+        var color = layers.backgroundColor
+        if color == nil, back == nil, let id = layers.background { color = ApkMetadata.color(for: id, resources: resources) }
+        guard fore != nil || back != nil else { return nil }
+
+        let side: CGFloat = 432                                       // 108 units at 4 px each
+        let visible = side * 72 / 108
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = back != nil || color.map { $0 >> 24 == 0xFF } == true
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: visible, height: visible), format: format)
+        return renderer.image { ctx in
+            let canvas = CGRect(x: -(side - visible) / 2, y: -(side - visible) / 2, width: side, height: side)
+            if let color {
+                UIColor(red: CGFloat((color >> 16) & 0xFF) / 255, green: CGFloat((color >> 8) & 0xFF) / 255,
+                        blue: CGFloat(color & 0xFF) / 255, alpha: CGFloat(color >> 24) / 255).setFill()
+                ctx.fill(CGRect(x: 0, y: 0, width: visible, height: visible))
+            } else if back == nil {
+                // A foreground with nothing said about what is behind it: the white a launcher would use.
+                UIColor.white.setFill()
+                ctx.fill(CGRect(x: 0, y: 0, width: visible, height: visible))
+            }
+            back?.draw(in: canvas)
+            fore?.draw(in: canvas)
+        }
+    }
+
+    /// Draw the icons of apps added by an older Husk again, the current way.
+    nonisolated static func refreshIcon(_ app: TLApp) {
+        let dir = TranslationLayer.root.appendingPathComponent(app.id, isDirectory: true)
+        let stamp = (try? String(contentsOf: dir.appendingPathComponent("icon-version.txt"), encoding: .utf8))
+            .flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) } ?? 0
+        guard stamp != iconVersion else { return }
+        describe(app.apks, into: dir, label: false)
     }
 
     nonisolated static func entry(_ apk: String, _ name: String, limit: Int) -> Data? {
@@ -351,106 +467,18 @@ final class TranslationLayerStore: ObservableObject {
 
 // MARK: - Settings
 
-struct TranslationLayerSettings: View {
+/// What the phone answers about running Android's native code, and where the translation layer stands: for
+/// developers, from Settings when developer information is on.
+struct TLChecksView: View {
     @ObservedObject private var store = TranslationLayerStore.shared
-    @State private var enabled = TranslationLayer.isEnabled
-    @State private var importing = false
-    @State private var confirmingTrust = false
-    @AppStorage(TranslationLayer.devInfoKey) private var devInfo = false
 
     var body: some View {
         Form {
-            Section {
-                Toggle("Android Translation Layer", isOn: $enabled)
-                    .onChange(of: enabled) { v in
-                        if v && !UserDefaults.standard.bool(forKey: TranslationLayer.trustKey) {
-                            enabled = false
-                            confirmingTrust = true
-                        } else {
-                            UserDefaults.standard.set(v, forKey: TranslationLayer.enabledKey)
-                            HuskLog.log("ui", v ? "translation layer on" : "translation layer off")
-                        }
-                    }
-            } header: {
-                Text("تجريبي")
-            } footer: {
-                if !devInfo {
-                    Text("يشغّل بعض تطبيقات أندرويد، مثل ألعاب Unity و cocos2d-x، مباشرة على آيفونك دون تشغيل "
-                       + "أندرويد. الكود يعمل داخل عملية ios app، وليس داخل آلة أندرويد المعزولة. "
-                       + "لا تشغّل فيه ملفات APK مجهولة المصدر.")
-                } else {
-                Text("يشغّل كود التطبيق نفسه مباشرة، مقابل إعادة كتابة لإطار "
-                   + "عمل أندرويد، بدلًا من إقلاع نظام أندرويد كامل — نفس "
-                   + "نهج Android Translation Layer على لينكس، أُعيد بناؤه لـ iOS. "
-                   + "يستطيع تشغيل ألعاب Unity و cocos2d-x (تجريبي) ويُبلغ عما تحتاجه التطبيقات الأخرى، "
-                   + "ويفحص هذا الآيفون للتحقق مما يعتمد عليه التصميم. "
-                   + "أندرويد نفسه لا يتأثر في الحالتين.")
-                }
-            }
-
-            if enabled {
-                appsSection
-                if devInfo {
-                    checksSection
-                    progressSection
-                }
-            }
+            checksSection
+            progressSection
         }
         .huskForm()
-        .alert("تشغيل كود داخل التطبيق", isPresented: $confirmingTrust) {
-            Button("إلغاء", role: .cancel) {}
-            Button("أفهم المخاطر، فعّل") {
-                UserDefaults.standard.set(true, forKey: TranslationLayer.trustKey)
-                UserDefaults.standard.set(true, forKey: TranslationLayer.enabledKey)
-                enabled = true
-            }
-        } message: {
-            Text("التشغيل الأصلي تجريبي وليس حاجزًا أمنيًا. قد يصل كود APK إلى ملفات التطبيق "
-               + "أو يتسبب في تعطله. استخدم تطبيقات موثوقة فقط؛ تشغيلها داخل أندرويد هو الخيار الأقل مخاطرة.")
-        }
-        .navigationTitle("Translation Layer")
-        .huskFilePicker(isPresented: $importing) { urls in
-            HuskLog.log("ui", "translation layer: adding \(urls.count) file(s): "
-                      + urls.map(\.lastPathComponent).joined(separator: ", "))
-            store.add(urls)
-        }
-        .onAppear { store.adoptDroppedAPKs() }
-        .alert("تعذّرت إضافة التطبيق", isPresented: Binding(
-                get: { store.lastError != nil },
-                set: { if !$0 { store.lastError = nil } })) {
-            Button("حسنًا", role: .cancel) { store.lastError = nil }
-        } message: {
-            Text(store.lastError ?? "")
-        }
-    }
-
-    private var appsSection: some View {
-        Section {
-            ForEach(store.apps) { app in
-                NavigationLink {
-                    TLAppReportView(app: app)
-                } label: {
-                    TLAppRow(app: app)
-                }
-            }
-            if let busy = store.busy {
-                HStack(spacing: 10) {
-                    ProgressView()
-                    Text(busy).foregroundStyle(Theme.textDim)
-                }
-            }
-            Button {
-                importing = true
-            } label: {
-                Label("إضافة APK", systemImage: "plus")
-            }
-            .disabled(store.busy != nil)
-        } header: {
-            Text("التطبيقات")
-        } footer: {
-            Text("يحتفظ ios app بنسخته الخاصة، منفصلة عن نسخة أندرويد. اختر ملف APK الأساسي "
-               + "وقطعه المنقسمة معًا لإضافتها كتطبيق واحد.")
-        }
+        .navigationTitle("Device Checks")
     }
 
     private var checksSection: some View {
@@ -472,32 +500,32 @@ struct TranslationLayerSettings: View {
             Button {
                 store.runChecks()
             } label: {
-                Label(store.checking ? "جارٍ الفحص…"
-                      : store.checks.isEmpty ? "تشغيل الفحوصات" : "إعادة التشغيل",
+                Label(store.checking ? "Checking…"
+                      : store.checks.isEmpty ? "Run checks" : "Run again",
                       systemImage: "stethoscope")
             }
             .disabled(store.checking)
         } header: {
-            Text("هذا الآيفون")
+            Text("This iPhone")
         } footer: {
-            Text("الكود الأصلي لأندرويد يتوقع أمورًا من المعالج والذاكرة "
-               + "لا يجيب عنها إلا الهاتف — وأهمها: هل يمكن لكود مكتبة "
-               + "أن يعمل وبياناته قابلة للكتابة بجانبه مباشرة. فعّل JIT أولًا، وإلا "
-               + "تُتخطّى فحوصات الذاكرة. النتائج تذهب إلى سجل النظام أيضًا.")
+            Text("Android's native code expects things of the processor and of memory "
+               + "that only the phone can answer -- above all, whether a library's code "
+               + "can run with its data writable right beside it. Enable JIT first, or "
+               + "the memory checks are skipped. The results go to the console too.")
         }
     }
 
     private var progressSection: some View {
         Section {
-            DetailRow(label: "تقارير التطبيقات", value: "يعمل", mono: false)
-            DetailRow(label: "فحوصات الجهاز", value: "يعمل", mono: false)
-            DetailRow(label: "محمّل المكتبات", value: "يعمل", mono: false)
-            DetailRow(label: "بيئة تشغيل أندرويد", value: "ألعاب Unity و cocos2d-x", mono: false)
-            DetailRow(label: "فتح التطبيقات", value: "ألعاب Unity و cocos2d-x (تجريبي)", mono: false)
+            DetailRow(label: "App reports", value: "working", mono: false)
+            DetailRow(label: "Device checks", value: "working", mono: false)
+            DetailRow(label: "Library loader", value: "working", mono: false)
+            DetailRow(label: "Android runtime", value: "Unity, cocos2d-x, GameActivity, SDL3", mono: false)
+            DetailRow(label: "Opening apps", value: "Unity, cocos2d-x, Minecraft and SDL3 games", mono: false)
         } header: {
-            Text("أين وصلنا")
+            Text("Where it stands")
         } footer: {
-            Text("الخطة بالترتيب موجودة في docs/04-translation-layer.md ضمن سورس Husk.")
+            Text("The plan, in order, is docs/04-translation-layer.md in Husk's source.")
         }
     }
 }
@@ -509,48 +537,28 @@ struct TLVerdict {
 
     init(_ report: TLReport?) {
         if report?.runsOnNativeRuntime == true {
-            title = "\(report!.nativeEngineName): التشغيل الأصلي"; tint = Theme.good
+            title = "\(report!.nativeEngineName): native runtime"; tint = Theme.good
             return
         }
         switch report?.verdict {
-        case "java"?:           title = "جافا فقط";                  tint = Theme.good
-        case "native"?:         title = "كود أصلي، يُحمّل بسلاسة";   tint = Theme.good
-        case "nativeWithWork"?: title = "كود أصلي، يحتاج عملًا";     tint = .orange
-        case "noArm64"?:        title = "لا يوجد كود arm64";          tint = .red
-        case "unreadable"?:     title = "تعذّرت قراءته";              tint = .red
-        default:                title = "لم يُفحص";                   tint = Theme.textDim
+        case "java"?:           title = "Java only";                    tint = Theme.good
+        case "native"?:         title = "Native code, maps cleanly";    tint = Theme.good
+        case "nativeWithWork"?: title = "Native code, needs work";      tint = .orange
+        case "noArm64"?:        title = "No arm64 code";                tint = .red
+        case "unreadable"?:     title = "Could not be read";            tint = .red
+        default:                title = "Not scanned";                  tint = Theme.textDim
         }
     }
 }
 
-/// What a person who is not debugging needs to know about an app: can it be run, or is it only an experiment.
+/// What a person who is not debugging needs to know about an app: will it run here, or may it not.
 struct TLPlainStatus {
     let title: String
     let tint: Color
 
     init(_ report: TLReport?) {
-        if report?.runsOnNativeRuntime == true { title = "جاهز للتشغيل"; tint = Theme.good }
-        else { title = "تجريبي"; tint = Theme.textDim }
-    }
-}
-
-private struct TLAppRow: View {
-    let app: TLApp
-    @AppStorage(TranslationLayer.devInfoKey) private var devInfo = false
-
-    var body: some View {
-        let verdict = TLVerdict(app.report)
-        let plain = TLPlainStatus(app.report)
-        HStack(spacing: 12) {
-            AppIcon(path: app.iconPath, size: 36)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(app.label).foregroundStyle(Theme.text).lineLimit(1)
-                Text(devInfo ? verdict.title : plain.title)
-                    .font(.system(size: 12))
-                    .foregroundStyle(devInfo ? verdict.tint : plain.tint)
-            }
-        }
-        .padding(.vertical, 2)
+        if report?.runsOnNativeRuntime == true { title = "Ready to run"; tint = Theme.good }
+        else { title = "May not run"; tint = Theme.textDim }
     }
 }
 
@@ -559,11 +567,11 @@ private struct TLCheckTag: View {
 
     var body: some View {
         switch status {
-        case "pass":    Tag(text: "ناجح", tint: Theme.good)
-        case "fail":    Tag(text: "فاشل", tint: .red)
-        case "warn":    Tag(text: "جزئيًا", tint: .orange)
-        case "skip":    Tag(text: "متخطّى")
-        default:        Tag(text: "معلومة", tint: Theme.accent)
+        case "pass":    Tag(text: "Pass", tint: Theme.good)
+        case "fail":    Tag(text: "Fail", tint: .red)
+        case "warn":    Tag(text: "Partly", tint: .orange)
+        case "skip":    Tag(text: "Skipped")
+        default:        Tag(text: "Info", tint: Theme.accent)
         }
     }
 }
@@ -609,7 +617,7 @@ struct TLAppReportView: View {
                     showAttempt = true
                 } label: {
                     HStack {
-                        Label("تجربة تشغيل (Translation Layer)", systemImage: "play.circle.fill")
+                        Label(devInfo ? "Run Translation Layer Attempt" : "Play", systemImage: "play.circle.fill")
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(Theme.accent)
                         Spacer()
@@ -618,26 +626,31 @@ struct TLAppReportView: View {
                             .foregroundStyle(Theme.textDim.opacity(0.5))
                     }
                 }
+                NavigationLink {
+                    TLAppSettingsView(app: app)
+                } label: {
+                    Label("Settings", systemImage: "gearshape")
+                }
             } footer: {
                 if devInfo {
-                    Text("يحمّل الكود الأصلي arm64 في ذاكرة JIT على Apple Silicon ويقود "
-                       + "دورة حياة NativeActivity. التطبيقات ذات Java/Dex تتطلب ART (المرحلة 2).")
+                    Text("Loads arm64 native code into JIT memory on Apple Silicon and drives "
+                       + "a NativeActivity lifecycle. Apps with Java/Dex require ART (milestone 2).")
                 } else {
-                    Text("فعّل JIT أولًا. أغلق اللعبة بزر «إغلاق» في الأعلى.")
+                    Text("Turn on JIT first. Close the game with Close at the top.")
                 }
             }
 
             if devInfo, let report = app.report {
                 Section {
                     if let engine = report.engine {
-                        DetailRow(label: "صُنع بـ", value: engine, mono: false)
+                        DetailRow(label: "Made with", value: engine, mono: false)
                     }
                     DetailRow(label: "Dex", value: dex(report), mono: false)
                     DetailRow(label: "ABIs", value: report.abis.isEmpty
-                              ? "لا يوجد" : report.abis.joined(separator: ", "))
-                    DetailRow(label: "ملفات APK", value: "\(app.apks.count)", mono: false)
+                              ? "none" : report.abis.joined(separator: ", "))
+                    DetailRow(label: "APKs", value: "\(app.apks.count)", mono: false)
                 } header: {
-                    Text("ما هو")
+                    Text("What it is")
                 }
 
                 if !report.systemLibraries.isEmpty {
@@ -647,9 +660,11 @@ struct TLAppReportView: View {
                             .foregroundStyle(Theme.text)
                             .textSelection(.enabled)
                     } header: {
-                        Text("مكتبات أندرويد التي يحتاجها")
+                        Text("Android libraries it needs")
                     } footer: {
-                        Text("مكتباته الخاصة ترتبط بهذه، وهو لا يحملها معه. كل واحدة منها شيء يجب أن توفره طبقة الترجمة.")
+                        Text("Its own libraries link against these, and it does not "
+                           + "carry them. Each is something the translation layer has "
+                           + "to provide.")
                     }
                 }
 
@@ -664,21 +679,22 @@ struct TLAppReportView: View {
 
             Section {
                 Button(role: .destructive) { confirmRemove = true } label: {
-                    Label("إزالة", systemImage: "trash")
+                    Label("Remove", systemImage: "trash")
                 }
             } footer: {
-                Text("يحذف نسخة ios app من ملفات APK. أي شيء مثبت في أندرويد لا يُمس.")
+                Text("Deletes Husk's copy of the APKs. Anything installed in Android is "
+                   + "untouched.")
             }
         }
         .huskForm()
         .navigationTitle(app.label)
-        .confirmationDialog("إزالة \(app.label)؟", isPresented: $confirmRemove,
+        .confirmationDialog("Remove \(app.label)?", isPresented: $confirmRemove,
                             titleVisibility: .visible) {
-            Button("إزالة", role: .destructive) {
+            Button("Remove", role: .destructive) {
                 store.remove(app)
                 dismiss()
             }
-            Button("إلغاء", role: .cancel) { }
+            Button("Cancel", role: .cancel) { }
         }
         // A native-runtime game is swiped, and a sheet takes a swipe down for itself: it goes full screen.
         .sheet(isPresented: Binding(get: { showAttempt && app.report?.runsOnNativeRuntime != true },
@@ -692,7 +708,7 @@ struct TLAppReportView: View {
     }
 
     private func dex(_ report: TLReport) -> String {
-        let files = report.dexCount == 1 ? "ملف واحد" : "\(report.dexCount) ملفات"
+        let files = report.dexCount == 1 ? "1 file" : "\(report.dexCount) files"
         let size = ByteCountFormatter.string(fromByteCount: report.dexBytes, countStyle: .file)
         return "\(files), \(size)"
     }
@@ -703,9 +719,9 @@ private struct TLLibraryRows: View {
 
     private var statusTitle: String {
         switch lib.status {
-        case "ok":      return "يُحمّل كما هو"
-        case "work":    return "يحتاج عملًا في المحمّل"
-        default:        return "تعذّر تحميله"
+        case "ok":      return "Maps as it is"
+        case "work":    return "Needs loader work"
+        default:        return "Cannot load"
         }
     }
 
@@ -736,22 +752,22 @@ private struct TLLibraryRows: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         if let layout = lib.layout {
-            DetailRow(label: "صفحات 16 KiB", value: layout)
+            DetailRow(label: "16 KiB pages", value: layout)
         }
         if let relocations = lib.relocations {
-            DetailRow(label: "إعادة التموضع", value: relocationText(relocations))
+            DetailRow(label: "Relocations", value: relocationText(relocations))
         }
         if let imports = lib.imports {
-            DetailRow(label: "الرموز المستوردة", value: "\(imports)")
+            DetailRow(label: "Imported symbols", value: "\(imports)")
         }
         if let svc = lib.svc, svc > 0 {
-            DetailRow(label: "استدعاءات النظام", value: "\(svc)")
+            DetailRow(label: "System calls", value: "\(svc)")
         }
         if let reads = lib.tpidrReads {
-            DetailRow(label: "قراءات سجل الخيط", value: "\(reads)")
+            DetailRow(label: "Thread register reads", value: "\(reads)")
         }
         if lib.tls == true {
-            DetailRow(label: "التخزين المحلي للخيط", value: "نعم", mono: false)
+            DetailRow(label: "Thread-local storage", value: "yes", mono: false)
         }
     }
 }
@@ -769,12 +785,12 @@ final class TLAttemptRunner: ObservableObject {
     private var timer: Timer?
 
     var statusText: String {
-        if isRunning { return "جارٍ تنفيذ المحاولة…" }
-        guard let code = exitCode else { return "جاهز" }
+        if isRunning { return "Running Attempt..." }
+        guard let code = exitCode else { return "Ready" }
         switch code {
-        case 2:  return "نجاح: رسم الضيف إطارات!"
-        case 1:  return "تم التحميل: حُمّلت المكتبات الأصلية (بدون رسم)"
-        default: return "مرفوض: تعذّر التنفيذ"
+        case 2:  return "Success: The guest drew frames!"
+        case 1:  return "Loaded: Native libraries loaded (no draw)"
+        default: return "Refused: Could not execute"
         }
     }
 
@@ -790,12 +806,12 @@ final class TLAttemptRunner: ObservableObject {
 
     var subStatusText: String {
         if isRunning {
-            return "\(frameCount) إطار مرسَل · جارٍ قيادة دورة الحياة"
+            return "\(frameCount) frame(s) posted · driving lifecycle"
         }
         if let code = exitCode {
-            return "رمز الخروج \(code) · \(frameCount) إطار مرسوم"
+            return "Exit code \(code) · \(frameCount) frame(s) drawn"
         }
-        return "لم يبدأ بعد"
+        return "Not started"
     }
 
     private var pollTicks: Int = 0
@@ -880,7 +896,7 @@ struct TLAttemptView: View {
     let app: TLApp
 
     var body: some View {
-        if app.report?.nativeEngine == .cocos || app.report?.nativeEngine == .minecraft {
+        if app.report?.nativeEngine == .cocos || app.report?.nativeEngine == .minecraft || app.report?.nativeEngine == .sdl || app.report?.nativeEngine == .ue4 || app.report?.nativeEngine == .gta || app.report?.nativeEngine == .nativeactivity {
             TLCocosAttemptView(app: app)
         } else if app.report?.runsOnNativeRuntime == true {
             TLUnityAttemptView(app: app)
@@ -915,13 +931,13 @@ struct TLClassicAttemptView: View {
                     }
                     Spacer()
                     if runner.isRunning {
-                        Button("إيقاف") {
+                        Button("Stop") {
                             runner.stop()
                         }
                         .buttonStyle(.bordered)
                         .tint(.red)
                     } else {
-                        Button("إعادة التشغيل") {
+                        Button("Rerun") {
                             runner.start(apks: app.apks)
                         }
                         .buttonStyle(.borderedProminent)
@@ -946,13 +962,13 @@ struct TLClassicAttemptView: View {
                 // is closed, so it cannot be part of what closes.
                 HStack(spacing: 10) {
                     Button {
-                        withAnimation(.easeOut(duration: 0.25)) { showLog.toggle() }
+                        withAnimation(.snappy(duration: 0.25)) { showLog.toggle() }
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: showLog ? "chevron.down" : "chevron.right")
                                 .font(.system(size: 11, weight: .bold))
                                 .frame(width: 12)
-                            Text("سجلّ المحاولة")
+                            Text("ATTEMPT LOG")
                                 .font(.technical(11, weight: .bold))
                         }
                         .foregroundStyle(Theme.textDim)
@@ -963,11 +979,11 @@ struct TLClassicAttemptView: View {
                         Button {
                             UIPasteboard.general.string = runner.logText
                         } label: {
-                            Label("نسخ", systemImage: "doc.on.doc")
+                            Label("Copy", systemImage: "doc.on.doc")
                                 .font(.system(size: 12))
                         }
                     } else {
-                        Text("انقر للعرض")
+                        Text("tap to show")
                             .font(.system(size: 11))
                             .foregroundStyle(Theme.textDim.opacity(0.7))
                     }
@@ -976,7 +992,7 @@ struct TLClassicAttemptView: View {
                 .padding(.vertical, 8)
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    if !showLog { withAnimation(.easeOut(duration: 0.25)) { showLog = true } }
+                    if !showLog { withAnimation(.snappy(duration: 0.25)) { showLog = true } }
                 }
 
                 }
@@ -984,7 +1000,7 @@ struct TLClassicAttemptView: View {
                 if showLog {
                     ScrollViewReader { proxy in
                         ScrollView {
-                            Text(runner.logText.isEmpty ? "جارٍ بدء المحاولة…" : runner.logText)
+                            Text(runner.logText.isEmpty ? "Starting attempt..." : runner.logText)
                                 .font(.technical(11))
                                 .foregroundStyle(Theme.text)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1004,7 +1020,7 @@ struct TLClassicAttemptView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("إغلاق") {
+                    Button("Close") {
                         runner.stop()
                         dismiss()
                     }

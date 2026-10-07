@@ -15,9 +15,10 @@ private let CS_DEBUGGED = UInt32(0x10000000)
 /// Gets Husk from "launched normally, no executable memory" to "JIT is live".
 ///
 /// On iOS 27 every supported device enforces TXM, so the app cannot grant itself
-/// executable memory — only an attached debugger can. StikDebug is that debugger.
-/// Husk hands it the JIT script inline over its URL scheme, so the user never has
-/// to configure anything inside StikDebug for Husk specifically.
+/// executable memory — only an attached debugger can. That debugger is either
+/// StikDebug, which Husk hands the JIT script inline over its URL scheme, or
+/// Husk's own built-in StikJIT helper (JITSetup.swift), which runs the same
+/// script from an app extension.
 enum JITBootstrap {
     private static let log = Logger(subsystem: "com.husk.app", category: "jit")
 
@@ -89,11 +90,11 @@ enum JITBootstrap {
             HuskLog.log("jit", "no trap servicer, but MAP_JIT executes here -- "
                              + "QEMU will map its own buffer")
         } else {
-            lastFailure = "المصحّح متصل لكنه لا يرد على طلبات الـ trap، "
-                        + "وهذا الجهاز لا ينفّذ تعيين MAP_JIT أيضًا، "
-                        + "لذلك تعذّر حجز ذاكرة تنفيذية. يحدث هذا عندما "
-                        + "يعمل Husk داخل تطبيق حاوية آخر بدلًا من تثبيته "
-                        + "منفردًا (sideload)."
+            lastFailure = "The debugger is attached but is not answering trap "
+                        + "requests, and this device will not execute a MAP_JIT "
+                        + "mapping either, so no executable memory could be "
+                        + "claimed. This is what happens when Husk runs inside "
+                        + "another container app rather than sideloaded on its own."
         }
         HuskLog.log("jit", ok ? "JIT region secured; it will be handed to QEMU later"
                               : "JIT prewarm FAILED -- StikDebug is not servicing traps")
@@ -180,11 +181,7 @@ enum JITBootstrap {
     /// not listening. The brk probe still runs once, inside the allocator, where
     /// its answer is immediately acted on.
     static var isDebuggerAttached: Bool {
-        var flags: UInt32 = 0
-        let rc = withUnsafeMutableBytes(of: &flags) { buf in
-            csops(getpid(), CS_OPS_STATUS, buf.baseAddress, buf.count)
-        }
-        if rc != 0 {
+        guard let flags = csStatus() else {
             HuskLog.log("jit", "csops failed (errno \(errno)); assuming no debugger")
             return false
         }
@@ -192,6 +189,61 @@ enum JITBootstrap {
         HuskLog.log("jit", String(format: "csops status = 0x%08x, CS_DEBUGGED = %@",
                                   flags, attached ? "set" : "clear"))
         return attached
+    }
+
+    /// `isDebuggerAttached` without the log line, for polling while the
+    /// built-in helper attaches.
+    static var debuggedFlag: Bool {
+        (csStatus() ?? 0) & CS_DEBUGGED != 0
+    }
+
+    private static func csStatus() -> UInt32? {
+        var flags: UInt32 = 0
+        let rc = withUnsafeMutableBytes(of: &flags) { buf in
+            csops(getpid(), CS_OPS_STATUS, buf.baseAddress, buf.count)
+        }
+        return rc == 0 ? flags : nil
+    }
+
+    static var isStikDebugInstalled: Bool {
+        URL(string: "stikjit://").map(UIApplication.shared.canOpenURL) ?? false
+    }
+
+    /// TrollStore answers enable-jit on the `apple-magnifier` scheme.
+    static var isTrollStoreInstalled: Bool {
+        URL(string: "apple-magnifier://").map(UIApplication.shared.canOpenURL) ?? false
+    }
+
+    /// Whether this copy of Husk was installed by TrollStore (or TrollStore Lite): it leaves a marker file next to the app in
+    /// its bundle container (TrollStore's `TS_MARKER`). Only then is it a TrollStore app, which keeps the entitlements it was
+    /// built with -- including the memory ones.
+    static var isInstalledWithTrollStore: Bool {
+        let container = Bundle.main.bundleURL.deletingLastPathComponent()
+        return ["_TrollStore", "_TrollStoreLite"].contains {
+            FileManager.default.fileExists(atPath: container.appendingPathComponent($0).path)
+        }
+    }
+
+    /// A rootless jailbreak (Dopamine and its kin) puts its files in /var/jb and lets apps see it.
+    static var isJailbroken: Bool { FileManager.default.fileExists(atPath: "/var/jb") }
+
+    /// Whether Husk was already marked as debugged when it was opened, before it asked anything of anyone. That is what a
+    /// jailbreak that allows JIT in apps does to every app it launches (Dopamine's "Allow JIT in Apps" setting), and it needs
+    /// no hand-off at all. Read once, early (HuskApp.init), so a later attach is not mistaken for it.
+    nonisolated(unsafe) static var debuggedAtLaunch = false
+    static func noteLaunchState() { debuggedAtLaunch = (csStatus() ?? 0) & CS_DEBUGGED != 0 }
+
+    /// Whether this iOS lets a process that is marked as debugged make executable memory for itself, as opposed to needing a
+    /// debugger to hand it out: true before iOS 26, which is when the Trusted Execution Monitor arrived. It is what makes
+    /// TrollStore and jailbreaks enough, without StikDebug.
+    static var canGrantOwnJIT: Bool {
+        if #available(iOS 26, *) { return false }
+        return true
+    }
+
+    /// husk-jit.js as standard base64, which Built-in StikJIT's custom script takes.
+    static var scriptBase64: String? {
+        loadScript()?.data(using: .utf8)?.base64EncodedString()
     }
 
     /// Ask StikDebug to attach to us and run the JIT script.

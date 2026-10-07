@@ -157,7 +157,7 @@ final class HuskBridgeFS: ObservableObject {
                                + "(\((try? FileManager.default.attributesOfItem(atPath: dest.path)[.size] as? NSNumber)??.intValue ?? 0) bytes)")
         } catch {
             HuskLog.log("bridge", "FAILED to queue \(name): \(error.localizedDescription)")
-            lastAgentMessage = "تعذّرت إضافة \(name): \(error.localizedDescription)"
+            lastAgentMessage = "Could not add \(name): \(error.localizedDescription)"
         }
     }
 
@@ -209,7 +209,7 @@ enum BridgeError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .io(let m):      return m
-        case .timeout(let m): return "انتهت المهلة: \(m)"
+        case .timeout(let m): return "timed out \(m)"
         }
     }
 }
@@ -395,14 +395,14 @@ final class GuestBridge {
             // connection every fifteen seconds.
             if n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) {
                 if Date() > deadline {
-                    throw BridgeError.timeout("بانتظار تنفيذ `\(command.prefix(60))`")
+                    throw BridgeError.timeout("waiting for `\(command.prefix(60))`")
                 }
                 continue
             }
             if n <= 0 {
-                let why = n == 0 ? "أغلقه الضيف" : "فشلت القراءة (errno \(errno))"
+                let why = n == 0 ? "the guest closed it" : "read failed (errno \(errno))"
                 dropControl(why)
-                throw BridgeError.io("أغلق الضيف الاتصال — \(why)")
+                throw BridgeError.io("guest closed the connection -- \(why)")
             }
             out += String(decoding: buf[0..<n], as: UTF8.self)
             if let r = out.range(of: token) {
@@ -419,7 +419,7 @@ final class GuestBridge {
                 // The connection is KEPT. Whatever this command eventually
                 // prints is preamble to the next command's marker, which no
                 // longer matches this one.
-                throw BridgeError.timeout("بانتظار تنفيذ `\(command.prefix(60))`")
+                throw BridgeError.timeout("waiting for `\(command.prefix(60))`")
             }
         }
     }
@@ -483,7 +483,7 @@ final class GuestBridge {
               progress: @escaping (Double) -> Void) throws {
         let size = (try FileManager.default.attributesOfItem(atPath: local.path)[.size]
                     as? NSNumber)?.intValue ?? 0
-        guard size > 0 else { throw BridgeError.io("\(local.lastPathComponent) فارغ") }
+        guard size > 0 else { throw BridgeError.io("\(local.lastPathComponent) is empty") }
 
         let handle = try FileHandle(forReadingFrom: local)
         defer { try? handle.close() }
@@ -531,7 +531,7 @@ final class GuestBridge {
         }
         if sent != size {
             dropControl("sent \(sent) of \(size) bytes; the stream is out of step")
-            throw BridgeError.io("أُرسل \(sent) من \(size) بايت")
+            throw BridgeError.io("sent \(sent) of \(size) bytes")
         }
 
         // head has its N bytes and exits; the marker is the shell telling us it
@@ -546,19 +546,19 @@ final class GuestBridge {
             if n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) {
                 if Date() > deadline {
                     dropControl("no acknowledgement after the transfer")
-                    throw BridgeError.timeout("بانتظار كتابة الضيف إلى \(remote)")
+                    throw BridgeError.timeout("waiting for the guest to write \(remote)")
                 }
                 continue
             }
             if n <= 0 {
-                let why = n == 0 ? "أغلقه الضيف" : "فشلت القراءة (errno \(errno))"
+                let why = n == 0 ? "the guest closed it" : "read failed (errno \(errno))"
                 dropControl(why)
-                throw BridgeError.io("\(why) بعد إرسال \(sent) بايت")
+                throw BridgeError.io("\(why) after sending \(sent) bytes")
             }
             out += String(decoding: buf[0..<n], as: UTF8.self)
             if Date() > deadline {
                 dropControl("no acknowledgement after the transfer")
-                throw BridgeError.timeout("بانتظار انتهاء الضيف من الكتابة إلى \(remote)")
+                throw BridgeError.timeout("waiting for the guest to finish writing \(remote)")
             }
         }
         HuskLog.log("bridge", "pushed \(sent) bytes to \(remote)")
@@ -867,10 +867,8 @@ final class AndroidHost: ObservableObject {
         guard let data = try? Data(contentsOf: catalogueURL),
               let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
         else { return [] }
-        var seen: Set<String> = []
         return rows.compactMap { row in
-            guard let name = row["name"] as? String, SourceValidation.package(name),
-                  seen.insert(name).inserted else { return nil }
+            guard let name = row["name"] as? String, !name.isEmpty else { return nil }
             let icon = (row["icon"] as? String) ?? ""
             let used = row["lastUsed"] as? Double
             return Package(name: name,
@@ -886,7 +884,7 @@ final class AndroidHost: ObservableObject {
     }
 
     @Published private(set) var isReady = false
-    @Published private(set) var status = "جارٍ تشغيل أندرويد…"
+    @Published private(set) var status = "Starting Android…"
     @Published private(set) var packages: [Package] = AndroidHost.loadCatalogue()
     @Published private(set) var busy: String?
     /// What just finished. Progress lives in `busy`; this is the sentence after.
@@ -910,7 +908,7 @@ final class AndroidHost: ObservableObject {
     func waitForReady() {
         guard !polling, !isReady else { return }
         polling = true
-        status = "جارٍ تشغيل أندرويد…"
+        status = "Starting Android…"
         Task.detached { [weak self] in
             var attempt = 0
             while true {
@@ -931,7 +929,7 @@ final class AndroidHost: ObservableObject {
                     if booted == "1" {
                         await MainActor.run {
                             self?.isReady = true
-                            self?.status = "أندرويد جاهز"
+                            self?.status = "Android is ready"
                             self?.polling = false
                         }
                         HuskLog.log("bridge", "guest is ready after \(attempt) attempts")
@@ -945,12 +943,12 @@ final class AndroidHost: ObservableObject {
                         await MainActor.run { self?.dumpDiagnostics() }
                         return
                     }
-                    await MainActor.run { self?.status = "جارٍ إقلاع أندرويد…" }
+                    await MainActor.run { self?.status = "Android is booting…" }
                 } catch {
                     GuestBridge.shared.disconnect()
                     await MainActor.run {
-                        self?.status = attempt < 4 ? "جارٍ تشغيل أندرويد…"
-                                                   : "بانتظار أندرويد (\(attempt * 3) ث)…"
+                        self?.status = attempt < 4 ? "Starting Android…"
+                                                   : "Waiting for Android (\(attempt * 3)s)…"
                     }
                 }
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
@@ -962,17 +960,16 @@ final class AndroidHost: ObservableObject {
     nonisolated func refreshPackages() async {
         do {
             let raw = try GuestBridge.shared.shell("pm list packages -3", timeout: 60)
-            let names = Array(Set(raw.split(separator: "\n")
+            let names = raw.split(separator: "\n")
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { $0.hasPrefix("package:") }
                 .map { String($0.dropFirst("package:".count)) }
-                .filter { SourceValidation.package($0) })).sorted()
+                .filter { !$0.isEmpty }
             // Android's own labels and icons, in one round trip for every app
             // at once, before anything is put on screen.
             let known = names.isEmpty ? [:] : await self.launcherCatalogue()
             var labels: [String: String] = [:]
             for (package, entry) in known {
-                guard SourceValidation.package(package) else { continue }
                 if let label = entry.label { labels[package] = label }
                 guard let icon = entry.icon else { continue }
                 let dest = Self.iconDirectory.appendingPathComponent("\(package).png")
@@ -1054,7 +1051,7 @@ final class AndroidHost: ObservableObject {
                 return [:]
             }
 
-            let db = try GuestBridge.shared.pull("cat \(Self.quote(path))", timeout: 120)
+            let db = try GuestBridge.shared.pull("cat \(path)", timeout: 120)
             guard db.prefix(6) == Data("SQLite".utf8) else {
                 HuskLog.log("bridge", "\(path) is not a SQLite file (\(db.count) bytes)")
                 return [:]
@@ -1067,7 +1064,7 @@ final class AndroidHost: ObservableObject {
             // an app installed this session, most of all -- are in the sidecar
             // rather than the file itself. Brought along so SQLite can replay
             // it; harmless when there is nothing to replay.
-            if let wal = try? GuestBridge.shared.pull("cat \(Self.quote(path + "-wal"))", timeout: 120),
+            if let wal = try? GuestBridge.shared.pull("cat \(path)-wal", timeout: 120),
                wal.count > 32 {
                 try? wal.write(to: Self.support.appendingPathComponent(
                     "launcher-icons.db-wal"))
@@ -1165,14 +1162,13 @@ final class AndroidHost: ObservableObject {
         } }
         guard !safe.isEmpty else { return }
 
-        let joined = safe.joined(separator: " ")
-        var script = "for p in " + joined + "; do "
-        script += "echo \"#P $p\"; "
-        script += "dumpsys package \"$p\" 2>/dev/null | grep -E "
-        script += "\"versionName=|primaryCpuAbi=|categoryHint=|appCategory=\" | head -8; "
-        script += "echo \"#K\"; "
-        script += "pm path \"$p\" 2>/dev/null | sed 's/^package://' | "
-        script += "while read a; do stat -c %s \"$a\" 2>/dev/null; done; done"
+        let script = "for p in " + safe.joined(separator: " ") + "; do "
+                   + "echo \"#P $p\"; "
+                   + "dumpsys package \"$p\" 2>/dev/null | grep -E "
+                   + "\"versionName=|primaryCpuAbi=|categoryHint=|appCategory=\" | head -8; "
+                   + "echo \"#K\"; "
+                   + "pm path \"$p\" 2>/dev/null | sed 's/^package://' | "
+                   + "while read a; do stat -c %s \"$a\" 2>/dev/null; done; done"
 
         guard let text = try? GuestBridge.shared.shell(script, timeout: 180) else {
             HuskLog.log("bridge", "could not read app details")
@@ -1183,7 +1179,7 @@ final class AndroidHost: ObservableObject {
         var current: String?
         var inSizes = false
         for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            let line = raw.trimmingCharacters(in: .whitespaces)
             if line.hasPrefix("#P ") {
                 current = String(line.dropFirst(3))
                 inSizes = false
@@ -1234,9 +1230,9 @@ final class AndroidHost: ObservableObject {
     /// usefully offer. Anything undefined stays nil and shows nothing.
     nonisolated private static func category(_ raw: String) -> String? {
         switch Int(raw) {
-        case 0:               return "لعبة"
-        case 1, 2, 3, 4, 5, 6: return "تطبيق"
-        case 7, 8:            return "أداة"
+        case 0:               return "Game"
+        case 1, 2, 3, 4, 5, 6: return "App"
+        case 7, 8:            return "Tool"
         default:              return nil
         }
     }
@@ -1293,7 +1289,7 @@ final class AndroidHost: ObservableObject {
     /// Single-quoted for a shell, with any quote of its own removed. A guest
     /// filename is chosen by whoever made the file and reaches a shell verbatim.
     nonisolated static func quote(_ path: String) -> String {
-        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        "'" + path.replacingOccurrences(of: "'", with: "") + "'"
     }
 
     /// Ask an app what it is called and what it looks like.
@@ -1306,7 +1302,6 @@ final class AndroidHost: ObservableObject {
     /// table, read the way `aapt` reads them, which needs nothing but the file
     /// itself. Only if that fails does it fall back to guessing at filenames.
     nonisolated private func fetchAppInfo(for package: String) async {
-        guard SourceValidation.package(package) else { return }
         let dest = Self.iconDirectory.appendingPathComponent("\(package).png")
         let haveIcon = FileManager.default.fileExists(atPath: dest.path)
         let haveLabel = await MainActor.run {
@@ -1440,7 +1435,7 @@ final class AndroidHost: ObservableObject {
         guard GuestBridge.shared.isAlive() else {
             let why = GuestBridge.shared.diagnose()
             HuskLog.log("bridge", "the shell is not answering -- \(why)")
-            return .unreachable("صدفة أندرويد لا ترد")
+            return .unreachable("the Android shell is not answering")
         }
         // mWakefulness is Awake / Asleep / Dozing / Dreaming.
         if let power = try? GuestBridge.shared.shell(
@@ -1467,7 +1462,7 @@ final class AndroidHost: ObservableObject {
     /// route in at all. Same transfer as an install, minus pm.
     func sendFiles(_ files: [URL], to directory: String = "/sdcard/Download") {
         guard !files.isEmpty else { return }
-        busy = "جارٍ إرسال \(files.count == 1 ? files[0].lastPathComponent : "\(files.count) ملفات")…"
+        busy = "Sending \(files.count == 1 ? files[0].lastPathComponent : "\(files.count) files")…"
         Task.detached { [weak self] in
             var sent = 0
             for file in files {
@@ -1475,7 +1470,7 @@ final class AndroidHost: ObservableObject {
                 do {
                     switch AndroidHost.guestState() {
                     case .locked:
-                        throw BridgeError.io("أندرويد مقفل. افتح القفل وحاول مجددًا.")
+                        throw BridgeError.io("Android is locked. Unlock it and try again.")
                     case .unreachable(let why):
                         throw BridgeError.io(why)
                     case .asleep:
@@ -1494,7 +1489,7 @@ final class AndroidHost: ObservableObject {
                         "mkdir -p \(Self.quote(directory))")
                     try GuestBridge.shared.push(file, to: "'\(remote)'") { p in
                         Task { @MainActor in
-                            self?.busy = "جارٍ إرسال \(name) — \(Int(p * 100))٪"
+                            self?.busy = "Sending \(name) — \(Int(p * 100))%"
                         }
                     }
                     // Without this the file exists and no app can see it: the
@@ -1506,7 +1501,7 @@ final class AndroidHost: ObservableObject {
                     sent += 1
                 } catch {
                     await MainActor.run {
-                        self?.busy = "تعذّر إرسال \(name): \(error.localizedDescription)"
+                        self?.busy = "Could not send \(name): \(error.localizedDescription)"
                     }
                     try? await Task.sleep(nanoseconds: 4_000_000_000)
                     await MainActor.run { self?.busy = nil }
@@ -1517,8 +1512,8 @@ final class AndroidHost: ObservableObject {
             let where_ = (directory as NSString).lastPathComponent
             await MainActor.run {
                 self?.busy = nil
-                self?.say(n == 1 ? "أُرسل الملف" : "\(n) ملفات أُرسلت",
-                          "في مجلد \(where_) داخل أندرويد.")
+                self?.say(n == 1 ? "File sent" : "\(n) files sent",
+                          "In Android's \(where_) folder.")
             }
         }
     }
@@ -1534,7 +1529,7 @@ final class AndroidHost: ObservableObject {
     /// it from there. This is the path for an APK that arrived through the
     /// Files tab, or that a browser in the guest downloaded itself.
     func installFromGuest(_ path: String, name: String) {
-        busy = "جارٍ تثبيت \(name)…"
+        busy = "Installing \(name)…"
         Task.detached { [weak self] in
             let out = (try? GuestBridge.shared.shell(
                 "pm install -r \(AndroidHost.quote(path))", timeout: 900)) ?? ""
@@ -1544,8 +1539,8 @@ final class AndroidHost: ObservableObject {
             await self?.refreshPackages()
             await MainActor.run {
                 self?.busy = nil
-                self?.say(ok ? "تم تثبيت APK" : "فشل التثبيت",
-                          ok ? "\(name) جاهز للتشغيل."
+                self?.say(ok ? "APK installed" : "Install failed",
+                          ok ? "\(name) is ready to launch."
                              : String(out.prefix(120))
                                  .trimmingCharacters(in: .whitespacesAndNewlines),
                           good: ok)
@@ -1554,8 +1549,7 @@ final class AndroidHost: ObservableObject {
     }
 
     func uninstall(_ package: String) {
-        guard SourceValidation.package(package), busy == nil else { return }
-        busy = "جارٍ إزالة \(package)…"
+        busy = "Removing \(package)…"
         Task.detached { [weak self] in
             var out = (try? GuestBridge.shared.shell("pm uninstall \(package)",
                                                      timeout: 300)) ?? ""
@@ -1578,8 +1572,8 @@ final class AndroidHost: ObservableObject {
             await self?.refreshPackages()
             await MainActor.run {
                 self?.busy = nil
-                self?.say(ok ? "تمت الإزالة" : "تعذّرت الإزالة",
-                          ok ? "\(label) حُذف من أندرويد." : label,
+                self?.say(ok ? "Uninstalled" : "Could not uninstall",
+                          ok ? "\(label) is gone from Android." : label,
                           good: ok)
             }
         }
@@ -1601,7 +1595,7 @@ final class AndroidHost: ObservableObject {
         guard let first = apks.first else { return }
         let name = apks.count == 1 ? first.lastPathComponent
                                    : "\(apks.count) APKs (\(first.lastPathComponent))"
-        busy = "جارٍ تثبيت \(name)…"
+        busy = "Installing \(name)…"
         Task.detached { [weak self] in
             // /data/local/tmp is the one directory the shell user owns outright,
             // and the one pm will read an APK from.
@@ -1626,15 +1620,15 @@ final class AndroidHost: ObservableObject {
                     _ = try? GuestBridge.shared.shell("input keyevent KEYCODE_WAKEUP")
                     Thread.sleep(forTimeInterval: 1.5)
                     if case .locked = AndroidHost.guestState() {
-                        throw BridgeError.io("أندرويد مقفل. افتح شاشة أندرويد "
-                                           + "وافتح القفل، ثم حاول مجددًا.")
+                        throw BridgeError.io("Android is locked. Open the Android "
+                                           + "screen, unlock it, and try again.")
                     }
                 case .locked:
-                    throw BridgeError.io("أندرويد مقفل. افتح شاشة أندرويد "
-                                       + "وافتح القفل، ثم حاول مجددًا.")
+                    throw BridgeError.io("Android is locked. Open the Android "
+                                       + "screen, unlock it, and try again.")
                 case .unreachable(let why):
-                    throw BridgeError.io("\(why). افتح شاشة أندرويد "
-                                       + "وتأكد أنها تعمل، ثم حاول مجددًا.")
+                    throw BridgeError.io("\(why). Open the Android screen and "
+                                       + "check it is running, then try again.")
                 case .ready:
                     break
                 }
@@ -1647,7 +1641,7 @@ final class AndroidHost: ObservableObject {
                         : "\(url.lastPathComponent) (\(i + 1)/\(apks.count))"
                     try GuestBridge.shared.push(url, to: remotes[i]) { p in
                         Task { @MainActor in
-                            self?.busy = "جارٍ نسخ \(label) — \(Int(p * 100))٪"
+                            self?.busy = "Copying \(label) — \(Int(p * 100))%"
                         }
                     }
                     // Confirm the whole file landed before asking pm to parse it.
@@ -1658,13 +1652,13 @@ final class AndroidHost: ObservableObject {
                     let landed = Int(try GuestBridge.shared.shell("wc -c < \(remotes[i])")
                         .trimmingCharacters(in: .whitespacesAndNewlines)) ?? -1
                     guard landed == size else {
-                        throw BridgeError.io("نُسخ \(landed) من \(size) بايت "
-                                           + "من \(url.lastPathComponent)")
+                        throw BridgeError.io("copied \(landed) of \(size) bytes "
+                                           + "of \(url.lastPathComponent)")
                     }
                     expected += size
                 }
 
-                await MainActor.run { self?.busy = "جارٍ تثبيت \(name)…" }
+                await MainActor.run { self?.busy = "Installing \(name)…" }
                 // Installing is dex2oat's work and it is emulated, so minutes
                 // rather than seconds for anything large. -t allows test-signed
                 // APKs, which most sideloaded builds are.
@@ -1710,8 +1704,8 @@ final class AndroidHost: ObservableObject {
                             HuskLog.log("bridge", "\(name) installed; not saving, "
                                       + "automatic saves are off")
                             self?.busy = nil
-                            self?.say("تم تثبيت APK",
-                                      "احفظ أندرويد للاحتفاظ به بعد هذه الجلسة.")
+                            self?.say("APK installed",
+                                      "Save Android to keep it past this session.")
                             return
                         }
 
@@ -1721,16 +1715,16 @@ final class AndroidHost: ObservableObject {
                         // install was already lost, which is worse than saying
                         // nothing -- it is a true-sounding statement that is no
                         // longer true.
-                        self?.busy = "جارٍ حفظ أندرويد — ستتجمد الشاشة للحظات"
+                        self?.busy = "Saving Android — the screen will freeze briefly"
                         QemuRunner.shared.saveState(reason: "installed \(name)") { saved in
                             self?.busy = nil
                             if saved {
-                                self?.say("تم تثبيت APK", "جاهز للتشغيل.")
+                                self?.say("APK installed", "Ready to launch.")
                             } else {
                                 HuskLog.log("bridge", "\(name) is installed but the machine "
                                           + "was not saved; it will be gone next launch")
-                                self?.say("تم التثبيت لكن لم يُحفظ",
-                                          "سيختفي عند التشغيل التالي.",
+                                self?.say("Installed, but not saved",
+                                          "It will be gone on the next launch.",
                                           good: false)
                             }
                         }
@@ -1738,7 +1732,7 @@ final class AndroidHost: ObservableObject {
                 } else {
                     await MainActor.run {
                         self?.busy = nil
-                        self?.say("فشل التثبيت",
+                        self?.say("Install failed",
                                   String(out.prefix(120)).trimmingCharacters(
                                       in: .whitespacesAndNewlines),
                                   good: false)
@@ -1746,7 +1740,7 @@ final class AndroidHost: ObservableObject {
                 }
             } catch {
                 HuskLog.log("bridge", "install failed: \(error.localizedDescription)")
-                await MainActor.run { self?.busy = "فشل التثبيت: \(error.localizedDescription)" }
+                await MainActor.run { self?.busy = "Install failed: \(error.localizedDescription)" }
                 Task { try? await Task.sleep(nanoseconds: 5_000_000_000)
                        await MainActor.run { self?.busy = nil } }
             }
@@ -1854,7 +1848,7 @@ final class AndroidHost: ObservableObject {
     /// Density moves with it, or every app lays out for a screen that is no
     /// longer there and the UI ends up cropped.
     func setRenderScale(_ scale: Double, then: @escaping () -> Void = {}) {
-        busy = scale >= 1 ? "جارٍ استعادة الدقة الكاملة…" : "جارٍ تقليل حجم العرض…"
+        busy = scale >= 1 ? "Restoring full resolution…" : "Reducing render size…"
         Task.detached { [weak self] in
             let base = GuestImage.shared.snapshotPins
             defer { Task { @MainActor in self?.busy = nil; then() } }
@@ -1906,9 +1900,8 @@ final class AndroidHost: ObservableObject {
     }
 
     func launch(_ pkg: String, then: @escaping () -> Void) {
-        guard SourceValidation.package(pkg), isReady, busy == nil else { return }
         markLaunched(pkg)
-        busy = "جارٍ الفتح…"
+        busy = "Opening…"
         Task.detached { [weak self] in
             let out = (try? GuestBridge.shared.shell(
                 "monkey -p \(pkg) -c android.intent.category.LAUNCHER 1", timeout: 60)) ?? ""

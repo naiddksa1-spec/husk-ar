@@ -76,18 +76,12 @@ struct GuestManifest: Codable, Equatable {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse,
-                  (200...299).contains(http.statusCode),
-                  data.count <= 1024 * 1024,
-                  response.url?.scheme?.lowercased() == "https" else {
+                  (200...299).contains(http.statusCode) else {
                 HuskLog.log("guest", "manifest unavailable (HTTP "
                           + "\((response as? HTTPURLResponse)?.statusCode ?? 0))")
                 return nil
             }
             let manifest = try JSONDecoder().decode(GuestManifest.self, from: data)
-            guard manifest.isValid else {
-                HuskLog.log("guest", "manifest rejected: invalid filenames, hashes or machine limits")
-                return nil
-            }
             HuskLog.log("guest", "manifest \(manifest.generation): image "
                       + "\(manifest.image.sha256.prefix(12))…, snapshot "
                       + "\(manifest.snapshot.sha256.prefix(12))…")
@@ -99,26 +93,8 @@ struct GuestManifest: Codable, Equatable {
     }
 
     func url(for file: String) -> URL {
-        URL(string: "https://github.com/Leviidev/Husk/releases/download/")!
-            .appendingPathComponent(GuestImage.dependenciesTag)
-            .appendingPathComponent(file)
-    }
-
-    var isValid: Bool {
-        SourceValidation.fileName(image.file)
-            && SourceValidation.digest(image.sha256) == image.sha256
-            && SourceValidation.digest(snapshot.sha256) == snapshot.sha256
-            && image.size > 0 && image.size <= 16 * 1024 * 1024 * 1024
-            && snapshot.size > 0 && snapshot.size <= 16 * 1024 * 1024 * 1024
-            && !snapshot.parts.isEmpty && snapshot.parts.count <= 32
-            && Set(snapshot.parts).count == snapshot.parts.count
-            && snapshot.parts.allSatisfy(SourceValidation.fileName)
-            && (256...4096).contains(snapshot.guestMiB)
-            && (128...4096).contains(snapshot.xres)
-            && (128...4096).contains(snapshot.yres)
-            && (1...8).contains(snapshot.smp ?? 4)
-            && (snapshot.cpu == nil || snapshot.cpu == GuestImage.defaultCpu
-                || snapshot.cpu == "max" || snapshot.cpu == "cortex-a72")
+        URL(string: "https://github.com/Leviidev/Husk/releases/download/"
+                  + "\(GuestImage.dependenciesTag)/\(file)")!
     }
 
     var partURLs: [URL] { snapshot.parts.map { url(for: $0) } }
@@ -139,8 +115,8 @@ enum GuestUpdate: Equatable {
     var title: String {
         switch self {
         case .none:     return ""
-        case .image:    return "تتوفر صورة أندرويد جديدة"
-        case .snapshot: return "تتوفر لقطة جديدة جاهزة الإقلاع"
+        case .image:    return "A new Android image is available"
+        case .snapshot: return "A new pre-booted snapshot is available"
         }
     }
 
@@ -155,14 +131,14 @@ enum GuestUpdate: Equatable {
         let size = String(format: "%.1f GB", gb)
         switch self {
         case .image:
-            return "تحميلها يستبدل نظام أندرويد ولقطته الجاهزة للإقلاع "
-                 + "(\(size))، ومعهما كل ما داخل أندرويد — بما فيه "
-                 + "التطبيقات المثبتة. اللقطة تُستعاد فقط على الصورة "
-                 + "التي حُفظت عليها، لذلك لا يمكن تحديثهما بشكل منفصل."
+            return "Downloading it replaces the Android system and its pre-booted "
+                 + "snapshot (\(size)), and with them everything inside Android — "
+                 + "installed apps included. A snapshot only restores against the "
+                 + "image it was saved on, so the two cannot be updated separately."
         case .snapshot:
-            return "بدونه يقلع أندرويد من الصفر، وهذا يستغرق عدة "
-                 + "دقائق. حجم التحميل \(size)، وهو يستبدل ما "
-                 + "داخل أندرويد الآن، بما فيه التطبيقات المثبتة."
+            return "Without it Android boots from cold, which takes several "
+                 + "minutes. The download is \(size), and it replaces what is "
+                 + "inside Android now, including installed apps."
         case .none:
             return ""
         }
@@ -189,12 +165,8 @@ final class DigestWriter {
         guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
         defer { try? handle.close() }
         let writer = DigestWriter()
-        do {
-            while let chunk = try handle.read(upToCount: 4 << 20), !chunk.isEmpty {
-                writer.update(chunk)
-            }
-        } catch {
-            return nil
+        while let chunk = try? handle.read(upToCount: 4 << 20), !chunk.isEmpty {
+            writer.update(chunk)
         }
         return writer.finish()
     }

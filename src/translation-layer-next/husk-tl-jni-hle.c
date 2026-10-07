@@ -30,6 +30,8 @@ static struct {
     char pkg[128], apk[1024], data[512], files[600], cache[600], ext_files[700], ext_cache[700], native_lib[64];
     int width, height;
     float density;
+    char version_name[64];
+    int version_code;
     jobj *activity, *resources, *assets, *appinfo, *pm, *display, *metrics, *config, *window, *wm, *looper, *handler;
 } H;
 
@@ -220,9 +222,150 @@ static void PM_hasSystemFeature(tl_jcall *c)
 static void PM_getPackageInfo(tl_jcall *c)
 {
     jobj *p = make("android/content/pm/PackageInfo");
-    set_str(p, "packageName", H.pkg); set_str(p, "versionName", "3.69.2"); set_int(p, "versionCode", 96070);
+    set_str(p, "packageName", H.pkg);
+    set_str(p, "versionName", H.version_name[0] ? H.version_name : "1.0");
+    set_int(p, "versionCode", H.version_code ? H.version_code : 1);
     c->ret = vl(p);
 }
+
+/*
+ * The app's own version, read from its manifest (Android binary XML): what PackageInfo reports, and what a game compares against the minimum its servers will
+ * serve. A made-up version makes a game believe it is out of date.
+ */
+static uint32_t ax32(const uint8_t *p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24); }
+static uint16_t ax16(const uint8_t *p) { return (uint16_t)(p[0] | (p[1] << 8)); }
+static bool ax_string(const uint8_t *pool, size_t pool_size, uint32_t index, char *out, size_t n)
+{
+    uint32_t count = ax32(pool + 8), flags = ax32(pool + 16), strings = ax32(pool + 20);
+    if (index >= count || 28 + 4ull * index + 4 > pool_size) return false;
+    size_t off = strings + ax32(pool + 28 + 4 * index);
+    if (off + 4 > pool_size) return false;
+    const uint8_t *q = pool + off;
+    if (flags & 0x100) {
+        size_t l = *q++; if (l & 0x80) q++;
+        size_t b = *q++; if (b & 0x80) b = ((b & 0x7F) << 8) | *q++;
+        if (b >= n) b = n - 1;
+        memcpy(out, q, b); out[b] = 0;
+    } else {
+        size_t l = ax16(q); q += 2;
+        if (l & 0x8000) { l = ((l & 0x7FFF) << 16) | ax16(q); q += 2; }
+        size_t k = 0;
+        for (size_t i = 0; i < l && k + 1 < n; i++) out[k++] = (char)ax16(q + 2 * i);
+        out[k] = 0;
+    }
+    return true;
+}
+static void read_manifest_version(const char *apk)
+{
+    tl_zip z; char err[160];
+    if (!tl_zip_open(&z, apk, err, sizeof(err))) return;
+    const tl_zip_entry *e = tl_zip_find(&z, "AndroidManifest.xml");
+    const uint8_t *data; size_t len; bool owned = false;
+    if (e && tl_zip_data(&z, e, 8u << 20, &data, &len, &owned, err, sizeof(err)) && len > 8 && ax16(data) == 0x0003) {
+        const uint8_t *pool = NULL; size_t pool_size = 0;
+        for (size_t off = ax16(data + 2); off + 8 <= len; ) {
+            uint16_t type = ax16(data + off); uint32_t size = ax32(data + off + 4);
+            if (size < 8 || off + size > len) break;
+            if (type == 0x0001) { pool = data + off; pool_size = size; }
+            else if (type == 0x0102 && pool) {                      /* the first element is <manifest> */
+                const uint8_t *el = data + off;
+                uint16_t astart = ax16(el + 24), asize = ax16(el + 26), acount = ax16(el + 28);
+                for (unsigned i = 0; i < acount; i++) {
+                    const uint8_t *at = el + 16 + astart + (size_t)i * asize;
+                    char name[40];
+                    if (!ax_string(pool, pool_size, ax32(at + 4), name, sizeof(name))) continue;
+                    uint8_t vtype = at[15]; uint32_t vdata = ax32(at + 16);
+                    if (!strcmp(name, "versionName")) {
+                        if (ax32(at + 8) != 0xFFFFFFFFu) ax_string(pool, pool_size, ax32(at + 8), H.version_name, sizeof(H.version_name));
+                        else if (vtype == 0x03) ax_string(pool, pool_size, vdata, H.version_name, sizeof(H.version_name));
+                    } else if (!strcmp(name, "versionCode") && (vtype == 0x10 || vtype == 0x11)) H.version_code = (int)vdata;
+                }
+                break;
+            }
+            off += size;
+        }
+    }
+    if (owned) free((void *)data);
+    tl_zip_close(&z);
+}
+
+/*
+ * The <meta-data> elements of the manifest, by name: an Unreal Engine game reads its project's settings (engine version, project name, whether Vulkan is
+ * supported) back through the activity from them, and they differ from game to game.
+ */
+#define MAX_META 64
+static struct { char key[110]; char val[130]; } g_meta[MAX_META];
+static int g_nmeta;
+static void read_manifest_meta(const char *apk)
+{
+    g_nmeta = 0;
+    tl_zip z; char err[160];
+    if (!tl_zip_open(&z, apk, err, sizeof(err))) return;
+    const tl_zip_entry *e = tl_zip_find(&z, "AndroidManifest.xml");
+    const uint8_t *data; size_t len; bool owned = false;
+    if (e && tl_zip_data(&z, e, 8u << 20, &data, &len, &owned, err, sizeof(err)) && len > 8 && ax16(data) == 0x0003) {
+        const uint8_t *pool = NULL; size_t pool_size = 0;
+        for (size_t off = ax16(data + 2); off + 8 <= len; ) {
+            uint16_t type = ax16(data + off); uint32_t size = ax32(data + off + 4);
+            if (size < 8 || off + size > len) break;
+            if (type == 0x0001) { pool = data + off; pool_size = size; }
+            else if (type == 0x0102 && pool && off + 36 <= len) {
+                const uint8_t *el = data + off; char tag[24];
+                if (ax_string(pool, pool_size, ax32(el + 20), tag, sizeof(tag)) && !strcmp(tag, "meta-data") && g_nmeta < MAX_META) {
+                    uint16_t astart = ax16(el + 24), asize = ax16(el + 26), acount = ax16(el + 28);
+                    char key[110] = "", val[130] = ""; bool has_val = false;
+                    for (unsigned i = 0; i < acount; i++) {
+                        const uint8_t *at = el + 16 + astart + (size_t)i * asize; char an[16];
+                        if (at + 20 > data + len || !ax_string(pool, pool_size, ax32(at + 4), an, sizeof(an))) continue;
+                        uint8_t vtype = at[15]; uint32_t vdata = ax32(at + 16);
+                        if (!strcmp(an, "name")) { if (ax32(at + 8) != 0xFFFFFFFFu) ax_string(pool, pool_size, ax32(at + 8), key, sizeof(key)); else if (vtype == 0x03) ax_string(pool, pool_size, vdata, key, sizeof(key)); }
+                        else if (!strcmp(an, "value")) {
+                            has_val = true;
+                            if (vtype == 0x03) { if (!ax_string(pool, pool_size, vdata, val, sizeof(val))) val[0] = 0; }
+                            else if (vtype == 0x12) snprintf(val, sizeof(val), "%s", vdata ? "true" : "false");
+                            else if (vtype == 0x10 || vtype == 0x11) snprintf(val, sizeof(val), "%d", (int)vdata);
+                            else if (vtype == 0x04) { float f; memcpy(&f, &vdata, 4); snprintf(val, sizeof(val), "%g", f); }
+                            else has_val = false;               /* a resource reference: nothing a game asks for by name */
+                        }
+                    }
+                    if (key[0] && has_val) { snprintf(g_meta[g_nmeta].key, sizeof(g_meta[0].key), "%s", key); snprintf(g_meta[g_nmeta].val, sizeof(g_meta[0].val), "%s", val); g_nmeta++; }
+                }
+            }
+            off += size;
+        }
+    }
+    if (owned) free((void *)data);
+    tl_zip_close(&z);
+}
+const char *tl_hle_manifest_meta(const char *key)
+{
+    for (int i = 0; i < g_nmeta; i++) if (!strcmp(g_meta[i].key, key)) return g_meta[i].val;
+    return NULL;
+}
+
+/*
+ * Settings.Secure.ANDROID_ID: the id a game uses to tell this device from the others, and which servers tie an account to. It must be this install's own and
+ * stable: a constant shared by every install is one account for everyone (a game's server happily hands back whoever had it first), and one that changed on
+ * every launch would be a new player each time. So it is made once, at random, and kept in the app's data directory.
+ */
+const char *tl_hle_android_id(void)
+{
+    static char id[40];
+    if (id[0]) return id;
+    char path[700]; snprintf(path, sizeof(path), "%s/android_id", H.data);
+    FILE *f = fopen(path, "r");
+    if (f) { if (!fgets(id, sizeof(id), f)) id[0] = 0; fclose(f); }
+    size_t n = strlen(id);
+    while (n && (id[n - 1] == '\n' || id[n - 1] == '\r')) id[--n] = 0;
+    if (n != 16) {
+        uint8_t r[8]; arc4random_buf(r, sizeof(r));
+        for (int i = 0; i < 8; i++) snprintf(id + 2 * i, 3, "%02x", r[i]);
+        f = fopen(path, "w");
+        if (f) { fputs(id, f); fclose(f); }
+    }
+    return id;
+}
+static void Secure_getString(tl_jcall *c) { c->ret = vl(STR(tl_hle_android_id())); }
 
 /* ------------------------------------------------------------------ Build */
 
@@ -420,7 +563,25 @@ static void SP_getBoolean(tl_jcall *c) { c->ret = vz(c->args[1].z); }
 static void SP_edit(tl_jcall *c) { c->ret = vl(make("android/content/SharedPreferences$Editor")); }
 static void Editor_self(tl_jcall *c) { c->ret = vl(tl_jni_ref(c->self)); }
 static void Editor_noop(tl_jcall *c) { (void)c; }
-static void Iterator_hasNext(tl_jcall *c) { c->ret = vz(0); }
+/* An iterator is empty unless it was made over a list (tl_jni_new_list_iterator). */
+typedef struct { jobj **items; uint32_t n, i; } list_iter;
+static void Iterator_hasNext(tl_jcall *c) { const list_iter *it = c->self ? c->self->native : NULL; c->ret = vz(it && it->i < it->n); }
+static void Iterator_next(tl_jcall *c)
+{
+    list_iter *it = c->self ? c->self->native : NULL;
+    if (!it || it->i >= it->n) { tl_jni_throw("java/util/NoSuchElementException", ""); c->ret = vl(NULL); return; }
+    c->ret = vl(tl_jni_ref(it->items[it->i++]));
+}
+jobj *tl_jni_new_list_iterator(jobj *const *items, uint32_t n)
+{
+    jobj *o = make("java/util/Iterator");
+    list_iter *it = calloc(1, sizeof(*it));
+    it->items = malloc((n ? n : 1) * sizeof(jobj *));
+    for (uint32_t i = 0; i < n; i++) it->items[i] = tl_jni_ref(items[i]);
+    it->n = n;
+    o->native = it;
+    return o;
+}
 
 
 /* ------------------------------------------------ strings and builders */
@@ -731,6 +892,7 @@ static const tl_jhle k_hle[] = {
     M("android/os/Process", "myPid", "()I", Process_myPid), M("android/os/Process", "myTid", "()I", Process_myTid),
     M("java/lang/Object", "getClass", "()Ljava/lang/Class;", Object_getClass),
     M("java/lang/Class", "getClassLoader", "()Ljava/lang/ClassLoader;", Class_getClassLoader),
+    M("android/provider/Settings$Secure", "getString", "(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;", Secure_getString),
     M("java/lang/ClassLoader", "findLibrary", "(Ljava/lang/String;)Ljava/lang/String;", ClassLoader_findLibrary),
     M("android/app/AlertDialog$Builder", "<init>", "(Landroid/content/Context;)V", Builder_init),
     M("android/app/AlertDialog$Builder", "setTitle", "(Ljava/lang/CharSequence;)Landroid/app/AlertDialog$Builder;", Builder_setTitle),
@@ -753,7 +915,7 @@ static const tl_jhle k_hle[] = {
     M("android/content/SharedPreferences$Editor", "putString", "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;", Editor_self),
     M("android/content/SharedPreferences$Editor", "putBoolean", "(Ljava/lang/String;Z)Landroid/content/SharedPreferences$Editor;", Editor_self),
     M("android/content/SharedPreferences$Editor", "apply", "()V", Editor_noop),
-    M("java/util/Iterator", "hasNext", "()Z", Iterator_hasNext),
+    M("java/util/Iterator", "hasNext", "()Z", Iterator_hasNext), M("java/util/Iterator", "next", "()Ljava/lang/Object;", Iterator_next),
     M("java/lang/String", "<init>", "()V", String_init_empty), M("java/lang/String", "<init>", "([B)V", String_init_bytes),
     M("java/lang/String", "<init>", "([BLjava/lang/String;)V", String_init_bytes), M("java/lang/String", "<init>", "([BII)V", String_init_bytes_range),
     M("java/lang/String", "<init>", "([BIILjava/lang/String;)V", String_init_bytes_range), M("java/lang/String", "<init>", "(Ljava/lang/String;)V", String_init_string),
@@ -820,6 +982,9 @@ void tl_hle_configure(const char *pkg, const char *apk, const char *data, int w,
     snprintf(H.ext_cache, sizeof(H.ext_cache), "%s/sdcard/Android/data/%s/cache", data, pkg);
     snprintf(H.native_lib, sizeof(H.native_lib), "/data/app/lib/arm64");
     H.width = w; H.height = h; H.density = 3.0f;
+    H.version_name[0] = 0; H.version_code = 0;
+    read_manifest_version(apk);
+    read_manifest_meta(apk);
     mkdirs(H.files); mkdirs(H.cache); mkdirs(H.ext_files); mkdirs(H.ext_cache);
 }
 

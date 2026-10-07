@@ -24,9 +24,6 @@ extern "C" {
 /* Index every classes*.dex in the APK. Returns the number of classes, or -1. */
 int tl_dexidx_open(const char *apk_path);
 
-/* Structural validation only. This is NOT a bytecode verifier or sandbox. */
-bool tl_dex_validate_bytes(const uint8_t *data, size_t size);
-
 /* `name` in JNI form: "com/unity3d/player/UnityPlayer". */
 bool tl_dexidx_has_class(const char *name);
 

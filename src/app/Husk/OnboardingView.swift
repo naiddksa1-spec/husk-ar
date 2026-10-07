@@ -37,8 +37,10 @@ struct OnboardingView: View {
     @State private var autoSave =
         UserDefaults.standard.object(forKey: "husk.autoSave") as? Bool ?? true
     @Environment(\.colorScheme) private var scheme
+    @ObservedObject private var jit = JITCoordinator.shared
+    @State private var settingUpJIT = false
 
-    private let pages = 3
+    private let pages = 4
 
     var body: some View {
         ZStack {
@@ -48,9 +50,11 @@ struct OnboardingView: View {
                 TabView(selection: $page) {
                     welcome.tag(0)
                     choices.tag(1)
-                    ready.tag(2)
+                    jitPage.tag(2)
+                    ready.tag(3)
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
+                .sheet(isPresented: $settingUpJIT) { JITSetupFlow() }
 
                 // One control, always in the same place. A flow that moves its
                 // own button around is harder to get through than one that does
@@ -61,18 +65,18 @@ struct OnboardingView: View {
                             Capsule()
                                 .fill(i == page ? Theme.accent : Color.secondary.opacity(0.3))
                                 .frame(width: i == page ? 18 : 6, height: 6)
-                                .animation(.easeOut(duration: 0.22), value: page)
+                                .animation(.snappy, value: page)
                         }
                     }
                     Button {
                         if page < pages - 1 {
-                            withAnimation(.easeOut(duration: 0.22)) { page += 1 }
+                            withAnimation(.snappy) { page += 1 }
                         } else {
                             save()
                             onDone()
                         }
                     } label: {
-                        Text(page < pages - 1 ? "متابعة" : "ابدأ استخدام ios app")
+                        Text(page < pages - 1 ? "Continue" : "Start using Husk")
                     }
                     .buttonStyle(PrimaryButtonStyle())
                     .padding(.horizontal, 28)
@@ -96,58 +100,52 @@ struct OnboardingView: View {
     // MARK: pages
 
     private var welcome: some View {
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(spacing: 20) {
             Spacer()
             if let art = HuskAppIcon.current.preview(dark: scheme == .dark) {
                 Image(uiImage: art)
                     .resizable().scaledToFit()
-                    .frame(width: 96, height: 96)
+                    .frame(width: 112, height: 112)
                     .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
+                    .shadow(color: Theme.accent.opacity(0.35), radius: 22, y: 10)
             }
-            Text("ios app")
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(Theme.accent)
-            Text("تطبيقاتك.\nمساحة جديدة.")
-                .font(.system(size: 44, weight: .bold))
-                .fixedSize(horizontal: false, vertical: true)
-            Text("مكتبة بسيطة على آيفونك لتشغيل تطبيقات أندرويد. "
-               + "استورد APK، نظّم ملفاتك، وافتح تطبيقاتك من مكان واحد.")
-                .font(.system(size: 17))
-                .foregroundStyle(Theme.textDim)
-                .fixedSize(horizontal: false, vertical: true)
-            Label("يتطلب JIT وبيئة أندرويد منفصلة", systemImage: "info.circle")
-                .font(.footnote)
-                .foregroundStyle(Theme.textDim)
+            Text("Husk").font(.system(size: 40, weight: .semibold, design: .rounded))
+            Text("Android apps, on your iPhone.")
+                .font(.title3).foregroundStyle(.secondary)
+            Text("Husk runs a real Android system and opens APKs inside it. "
+               + "A few questions first — all of them can be changed later in Settings.")
+                .font(.callout).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 34).padding(.top, 4)
             Spacer()
         }
-        .padding(.horizontal, 32)
     }
 
     private var choices: some View {
         ScrollView {
             VStack(spacing: 14) {
-                Text("خلّه على طريقتك")
+                Text("How should Husk behave?")
                     .font(.title2.weight(.semibold))
                     .padding(.top, 34).padding(.bottom, 6)
 
-                choice(icon: "bolt.fill", title: "تشغيل أندرويد عند الفتح",
-                       detail: "يُقلع نظام الضيف فور فتح ios app، عندما يكون JIT "
-                             + "متاحًا. إيقافه يعني أنك تشغّله بنفسك.",
+                choice(icon: "bolt.fill", title: "Start Android on launch",
+                       detail: "Boots the guest as soon as Husk opens, once JIT is "
+                             + "available. Off means you start it yourself.",
                        isOn: $autoStart)
 
-                choice(icon: "rectangle.landscape.rotate", title: "شاشة أفقية",
-                       detail: "يمنح أندرويد شاشة أفقية تملؤها الألعاب "
-                             + "جيدًا، وتظهر تطبيقات الوضع العمودي داخل إطار.",
+                choice(icon: "rectangle.landscape.rotate", title: "Landscape screen",
+                       detail: "Gives Android a landscape screen, which games fill "
+                             + "properly. Portrait apps get letterboxed instead.",
                        isOn: $landscape)
 
-                choice(icon: "speaker.wave.2.fill", title: "الصوت",
-                       detail: "يضيف جهاز صوت. لا يمكن حفظ أندرويد أثناء "
-                             + "تفعيله، لذا يبدأ كل تشغيل من الصفر.",
+                choice(icon: "speaker.wave.2.fill", title: "Sound",
+                       detail: "Adds a sound device. Android cannot be saved while "
+                             + "this is on, so every launch boots from cold.",
                        isOn: $sound)
 
-                choice(icon: "externaldrive.badge.checkmark", title: "الحفظ التلقائي",
-                       detail: "يحفظ الجهاز بعد استقرار أندرويد، فتستعيده "
-                             + "التشغيلات التالية خلال ثوانٍ بدل الإقلاع من جديد.",
+                choice(icon: "externaldrive.badge.checkmark", title: "Save automatically",
+                       detail: "Saves the machine once Android settles, so later "
+                             + "launches restore in seconds instead of booting.",
                        isOn: $autoSave)
             }
             .padding(.horizontal, 20).padding(.bottom, 20)
@@ -175,16 +173,53 @@ struct OnboardingView: View {
         .huskCard()
     }
 
+    /// What the JIT page says is already in place, if anything.
+    private var jitState: String? {
+        if JITBootstrap.debuggedFlag { return "JIT is on." }
+        if jit.method == .stikDebug { return "Husk will use StikDebug." }
+        if jit.method == .trollStore { return "Husk will use TrollStore." }
+        switch jit.pairingSource {
+        case .onDevice: return "Paired on this device."
+        case .imported: return "Pairing file imported."
+        case nil: return nil
+        }
+    }
+
+    private var jitPage: some View {
+        VStack(spacing: 18) {
+            Spacer()
+            Image(systemName: "bolt.fill")
+                .font(.system(size: 54))
+                .foregroundStyle(Theme.accent)
+            Text("Turn on JIT").font(.largeTitle.weight(.semibold))
+            Text("Android and Translation Layer games need JIT, which on iOS only an attached debugger can grant. "
+               + "StikJIT is built into Husk and is the recommended way: it turns JIT on from inside the app, "
+               + "with no computer and no other app. StikDebug and TrollStore work too.")
+                .font(.callout).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 34)
+            if let state = jitState {
+                Label(state, systemImage: "checkmark.circle.fill")
+                    .font(.callout.weight(.medium)).foregroundStyle(.green)
+            }
+            Button(jitState == nil ? "Set Up StikJIT Now" : "Change JIT Setup") { settingUpJIT = true }
+                .font(.body.weight(.semibold))
+                .foregroundStyle(Theme.accent)
+                .padding(.top, 4)
+            Spacer()
+        }
+    }
+
     private var ready: some View {
         VStack(spacing: 18) {
             Spacer()
             Image(systemName: "checkmark.seal.fill")
                 .font(.system(size: 62))
                 .foregroundStyle(Theme.accent)
-            Text("جاهز").font(.largeTitle.weight(.semibold))
-            Text("يحتاج ios app إلى JIT لتشغيل أندرويد، ولا يمنحه في iOS إلا أداة "
-               + "تصحيح الأخطاء. إن لم يكن مفعّلًا، ستخبرك المكتبة بذلك وتعرض "
-               + "عليك فتح StikDebug.")
+            Text("Ready").font(.largeTitle.weight(.semibold))
+            Text("If JIT is not on when Android starts, Husk turns it on with the "
+               + "method you chose, or walks you through setting one up. You can "
+               + "change it any time in Settings › JIT & sideload.")
                 .font(.callout).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 34)

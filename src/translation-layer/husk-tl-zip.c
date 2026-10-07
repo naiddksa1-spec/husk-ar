@@ -65,7 +65,7 @@ static bool find_end(const tl_zip *z, uint64_t *at)
     uint64_t lowest = z->size > 22 + 0xFFFF ? z->size - 22 - 0xFFFF : 0;
     for (uint64_t i = z->size - 22 + 1; i-- > lowest;) {
         const uint8_t *p = z->map + i;
-        if (rd32(p) == SIG_END && i + 22 + rd16(p + 20) == z->size) {
+        if (rd32(p) == SIG_END && i + 22 + rd16(p + 20) <= z->size) {
             *at = i;
             return true;
         }
@@ -79,7 +79,7 @@ static bool find_end(const tl_zip *z, uint64_t *at)
 static bool apply_zip64_extra(const uint8_t *extra, uint16_t len, tl_zip_entry *e,
                               bool need_usize, bool need_csize, bool need_offset)
 {
-    size_t pos = 0;
+    uint16_t pos = 0;
     while ((uint32_t)pos + 4 <= len) {
         uint16_t id = rd16(extra + pos);
         uint16_t size = rd16(extra + pos + 2);
@@ -103,7 +103,7 @@ static bool apply_zip64_extra(const uint8_t *extra, uint16_t len, tl_zip_entry *
             }
             return true;
         }
-        pos += 4u + size;
+        pos = (uint16_t)(pos + 4 + size);
     }
     return !(need_usize || need_csize || need_offset);
 }
@@ -141,11 +141,6 @@ bool tl_zip_open(tl_zip *z, const char *path, char *err, size_t errlen)
         return false;
     }
     const uint8_t *e = z->map + end;
-    if (rd16(e + 4) != 0 || rd16(e + 6) != 0 || rd16(e + 8) != rd16(e + 10)) {
-        fail(err, errlen, "multi-disk ZIP is unsupported");
-        tl_zip_close(z);
-        return false;
-    }
     uint64_t count = rd16(e + 10);
     uint64_t cd_size = rd32(e + 12);
     uint64_t cd_off = rd32(e + 16);
@@ -167,7 +162,7 @@ bool tl_zip_open(tl_zip *z, const char *path, char *err, size_t errlen)
         cd_off = rd64(z->map + rec + 48);
     }
 
-    if (!in_file(z, cd_off, cd_size) || cd_off > end || cd_size > end - cd_off) {
+    if (!in_file(z, cd_off, cd_size)) {
         fail(err, errlen, "central directory lies outside the file");
         tl_zip_close(z);
         return false;
@@ -208,7 +203,6 @@ bool tl_zip_open(tl_zip *z, const char *path, char *err, size_t errlen)
         tl_zip_entry *en = &z->entries[z->count];
         en->flags = rd16(c + 8);
         en->method = rd16(c + 10);
-        en->crc32 = rd32(c + 16);
         en->csize = rd32(c + 20);
         en->usize = rd32(c + 24);
         en->local_offset = rd32(c + 42);
@@ -292,18 +286,7 @@ bool tl_zip_data(const tl_zip *z, const tl_zip_entry *e, size_t limit,
         return false;
     }
     const uint8_t *l = z->map + e->local_offset;
-    if (rd16(l + 8) != e->method || rd16(l + 6) != e->flags) {
-        fail(err, errlen, "%s: local and central headers disagree", e->name);
-        return false;
-    }
     uint64_t data_off = e->local_offset + 30ull + rd16(l + 26) + rd16(l + 28);
-    uint16_t local_name_len = rd16(l + 26);
-    if (!in_file(z, e->local_offset + 30, local_name_len)
-        || strlen(e->name) != local_name_len
-        || memcmp(l + 30, e->name, local_name_len) != 0) {
-        fail(err, errlen, "%s: local filename differs", e->name);
-        return false;
-    }
     if (!in_file(z, data_off, e->csize)) {
         fail(err, errlen, "%s runs past the end of the file", e->name);
         return false;
@@ -313,16 +296,6 @@ bool tl_zip_data(const tl_zip *z, const tl_zip_entry *e, size_t limit,
     if (e->method == 0) {
         if (e->csize != e->usize) {
             fail(err, errlen, "%s: stored entry with mismatched sizes", e->name);
-            return false;
-        }
-        uLong crc = crc32(0L, Z_NULL, 0);
-        for (uint64_t off = 0; off < e->usize;) {
-            uInt n = e->usize - off > 0x40000000u ? 0x40000000u : (uInt)(e->usize - off);
-            crc = crc32(crc, data + off, n);
-            off += n;
-        }
-        if ((uint32_t)crc != e->crc32) {
-            fail(err, errlen, "%s: CRC mismatch", e->name);
             return false;
         }
         *out = data;
@@ -352,7 +325,6 @@ bool tl_zip_data(const tl_zip *z, const tl_zip_entry *e, size_t limit,
     const uint8_t *in = data;
     uint8_t *dst = buf;
     int rc = Z_OK;
-    uint8_t overflow_byte;
     while (rc == Z_OK) {
         if (zs.avail_in == 0 && in_left > 0) {
             uInt n = in_left > 0x40000000u ? 0x40000000u : (uInt)in_left;
@@ -368,37 +340,18 @@ bool tl_zip_data(const tl_zip *z, const tl_zip_entry *e, size_t limit,
             dst += n;
             out_left -= n;
         }
-        // Even an empty deflate stream needs output space for zlib to consume
-        // its end marker. One spare byte also detects lying uncompressed sizes.
-        if (zs.avail_out == 0 && out_left == 0) {
-            zs.next_out = &overflow_byte;
-            zs.avail_out = 1;
-        }
         if (zs.avail_in == 0 && zs.avail_out == 0) {
             break;
         }
         /* Z_BUF_ERROR ends the loop too: out of input before the end marker,
          * or more output than the directory promised. Both are damage. */
         rc = inflate(&zs, Z_NO_FLUSH);
-        if (zs.total_out > e->usize) { rc = Z_DATA_ERROR; break; }
     }
     uint64_t produced = zs.total_out;
-    uint64_t consumed = zs.total_in;
     inflateEnd(&zs);
-    if (rc != Z_STREAM_END || produced != e->usize || consumed != e->csize) {
+    if (rc != Z_STREAM_END || produced != e->usize) {
         free(buf);
         fail(err, errlen, "%s did not inflate cleanly", e->name);
-        return false;
-    }
-    uLong crc = crc32(0L, Z_NULL, 0);
-    for (uint64_t off = 0; off < produced;) {
-        uInt n = produced - off > 0x40000000u ? 0x40000000u : (uInt)(produced - off);
-        crc = crc32(crc, buf + off, n);
-        off += n;
-    }
-    if ((uint32_t)crc != e->crc32) {
-        free(buf);
-        fail(err, errlen, "%s: CRC mismatch", e->name);
         return false;
     }
     *out = buf;

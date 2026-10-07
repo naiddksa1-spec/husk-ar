@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "husk-tl-bionic.h"
+#include "husk-tl-ld.h"
 #include "husk-tl-xmem.h"
 
 void *tl_nwindow_native(void *window);
@@ -158,7 +159,20 @@ PASS_BOOL(eglDestroyContext, (EGLDisplay d, EGLContext c), (d, c))
 PASS_BOOL(eglDestroySurface, (EGLDisplay d, EGLSurface s), (d, s))
 PASS_BOOL(eglQuerySurface, (EGLDisplay d, EGLSurface s, EGLint at, EGLint *v), (d, s, at, v))
 PASS_BOOL(eglSurfaceAttrib, (EGLDisplay d, EGLSurface s, EGLint at, EGLint v), (d, s, at, v))
-PASS_BOOL(eglMakeCurrent, (EGLDisplay d, EGLSurface dr, EGLSurface rd, EGLContext c), (d, dr, rd, c))
+static EGLBoolean w_eglMakeCurrent(EGLDisplay d, EGLSurface dr, EGLSurface rd, EGLContext c)
+{
+    EGLBoolean ok = E.ready ? a_eglMakeCurrent(d, dr, rd, c) : EGL_FALSE;
+    static int trace = -1;
+    if (trace < 0) trace = getenv("TL_EGL_TRACE") ? 1 : 0;
+    if (trace || !ok) {
+        char who[32] = ""; pthread_getname_np(pthread_self(), who, sizeof(who));
+        const void *lr = __builtin_return_address(0); const char *lib = NULL; const void *base = NULL;
+        const char *sym = tl_ld_symbol_at(lr, &lib, &base);
+        tl_log_line("egl: eglMakeCurrent(draw %p, read %p, context %p) -> %s%s%#x  [thread '%s', called from %s %s+%#lx]", dr, rd, c, ok ? "true" : "false", ok ? "" : ", eglGetError ", ok ? 0 : (E.ready ? a_eglGetError() : 0x3001),
+                    who, lib ? lib : "?", sym ? sym : "?", base ? (unsigned long)((const char *)lr - (const char *)base) : 0ul);
+    }
+    return ok;
+}
 PASS_BOOL(eglSwapInterval, (EGLDisplay d, EGLint i), (d, i))
 PASS_BOOL(eglBindAPI, (EGLenum api), (api))
 PASS_BOOL(eglWaitGL, (void), ())
@@ -166,7 +180,30 @@ PASS_BOOL(eglWaitNative, (EGLint e), (e))
 PASS_BOOL(eglReleaseThread, (void), ())
 
 static const char *w_eglQueryString(EGLDisplay d, EGLint name) { return a_eglQueryString(d, name); }
-static EGLContext w_eglCreateContext(EGLDisplay d, EGLConfig c, EGLContext share, const EGLint *at) { return a_eglCreateContext(d, c, share, at); }
+static bool g_es31_shim;           /* defined with the rest of the shim, below */
+static EGLContext w_eglCreateContext(EGLDisplay d, EGLConfig c, EGLContext share, const EGLint *at)
+{
+    /* A game that insists on ES 3.1 or 3.2 (Unreal Engine tries 3.2, then 3.1) is given the 3.0 context ANGLE can make: the version it is then told is the shim's. */
+    EGLint patched[40];
+    if (g_es31_shim && at) {
+        int n = 0;
+        for (; at[n] != EGL_NONE && n < 36; n += 2) {
+            patched[n] = at[n]; patched[n + 1] = at[n + 1];
+            if (at[n] == 0x30fb /* EGL_CONTEXT_MINOR_VERSION */ && at[n + 1] > 0) patched[n + 1] = 0;
+        }
+        patched[n] = EGL_NONE;
+        at = patched;
+    }
+    EGLContext ctx = a_eglCreateContext(d, c, share, at);
+    static int trace = -1;
+    if (trace < 0) trace = getenv("TL_EGL_TRACE") ? 1 : 0;
+    if (trace || !ctx) {
+        char buf[200]; size_t k = 0;
+        for (int i = 0; at && at[i] != EGL_NONE && i < 20 && k + 24 < sizeof(buf); i += 2) k += (size_t)snprintf(buf + k, sizeof(buf) - k, " %#x=%d", at[i], at[i + 1]);
+        tl_log_line("egl: eglCreateContext(share %p,%s ) -> %p%s", share, buf, ctx, ctx ? "" : " (failed)");
+    }
+    return ctx;
+}
 static EGLContext w_eglGetCurrentContext(void) { return a_eglGetCurrentContext(); }
 static EGLSurface w_eglGetCurrentSurface(EGLint w) { return a_eglGetCurrentSurface(w); }
 static EGLDisplay w_eglGetCurrentDisplay(void) { return a_eglGetCurrentDisplay(); }
@@ -174,9 +211,12 @@ static EGLenum w_eglQueryAPI(void) { return a_eglQueryAPI(); }
 static EGLint w_eglGetError(void) { return E.ready ? a_eglGetError() : 0x3001; }
 
 /* The guest's ANativeWindow: a Metal layer on the phone, an off-screen buffer for tests. */
+static bool g_offscreen_windows;
+/* A game that draws with Vulkan on the window's layer still makes an OpenGL ES context first, to read what the device offers. The layer is MoltenVK's, so ANGLE gets a buffer instead. */
+void tl_egl_offscreen_windows(bool on) { g_offscreen_windows = on; }
 static EGLSurface w_eglCreateWindowSurface(EGLDisplay d, EGLConfig cfg, void *win, const EGLint *at)
 {
-    if (E.frame_dir[0]) {
+    if (E.frame_dir[0] || g_offscreen_windows) {
         EGLint pb[] = { EGL_WIDTH, tl_nwindow_width(win), EGL_HEIGHT, tl_nwindow_height(win), EGL_NONE };
         EGLSurface s = a_eglCreatePbufferSurface(d, cfg, pb);
         tl_log_line("egl: window %dx%d -> off-screen surface %p", pb[1], pb[3], s);
@@ -312,6 +352,14 @@ static const char *const k_hidden_ext[] = { "GL_EXT_disjoint_timer_query", "GL_E
 static bool ext_hidden(const char *name, size_t n)
 {
     for (int i = 0; k_hidden_ext[i]; i++) if (strlen(k_hidden_ext[i]) == n && !strncmp(k_hidden_ext[i], name, n)) return true;
+    /* TL_GL_HIDE=GL_a,GL_b: more to leave out, for finding which an engine's choice depends on (which texture format it picks, say). */
+    const char *extra = getenv("TL_GL_HIDE");
+    while (extra && *extra) {
+        const char *e = strchr(extra, ',');
+        size_t m = e ? (size_t)(e - extra) : strlen(extra);
+        if (m == n && !strncmp(extra, name, n)) return true;
+        extra += m; if (e) extra++;
+    }
     return false;
 }
 
@@ -335,7 +383,7 @@ static const unsigned char *w_glGetString(unsigned name)
     if (source != s) {
         free(filtered);
         size_t len = strlen((const char *)s);
-        filtered = malloc(len + 1);
+        filtered = malloc(len + 64);
         size_t k = 0;
         for (const char *p = (const char *)s; *p;) {
             const char *e = strchr(p, ' ');
@@ -343,6 +391,8 @@ static const unsigned char *w_glGetString(unsigned name)
             if (n && !ext_hidden(p, n)) { if (k) filtered[k++] = ' '; memcpy(filtered + k, p, n); k += n; }
             p += n; if (e) p++;
         }
+        /* The engines that need ES 3.1 buffer textures check for the extension before asking for its entry points. */
+        if (g_es31_shim) { k += (size_t)snprintf(filtered + k, 62, "%sGL_EXT_texture_buffer", k ? " " : ""); }
         filtered[k] = 0;
         source = s;
     }
@@ -516,9 +566,23 @@ static const char *const k_noop_names[] = {
     "glDebugMessageControlKHR", NULL
 };
 
+/* ES 3.1 entry points an ES 3.0 context cannot honour. Under the 3.1 shim a game that asks for them is handed an empty function,
+ * so that setup which merely creates the objects goes through; whatever really depends on them draws nothing. */
+static const char *const k_es31_stub_names[] = {
+    "glTexBufferEXT", "glTexBufferOES", "glTexBuffer", "glTexBufferRangeEXT", "glTexBufferRangeOES", "glTexBufferRange",
+    "glBindImageTexture", "glDispatchCompute", "glDispatchComputeIndirect", "glMemoryBarrier", "glMemoryBarrierByRegion",
+    "glFramebufferParameteri", "glGetFramebufferParameteriv", "glTexStorage2DMultisample", NULL
+};
+
 void *tl_egl_resolve(const char *name)
 {
     for (int i = 0; k_noop_names[i]; i++) if (!strcmp(k_noop_names[i], name)) return (void *)w_gl_noop;
+    if (g_es31_shim) for (int i = 0; k_es31_stub_names[i]; i++) if (!strcmp(k_es31_stub_names[i], name)) {
+        void *real = E.ready && a_eglGetProcAddress ? a_eglGetProcAddress(name) : NULL;
+        if (real) break;
+        static int said; if (!said++) tl_log_line("gl: stubbing ES 3.1 entry points ANGLE lacks (first: %s)", name);
+        return (void *)w_gl_noop;
+    }
     for (size_t i = 0; i < sizeof(k_egl) / sizeof(k_egl[0]); i++) if (!strcmp(k_egl[i].name, name)) return k_egl[i].fn;
     if (!E.ready || !a_eglGetProcAddress) return NULL;
     void *real = a_eglGetProcAddress(name);
