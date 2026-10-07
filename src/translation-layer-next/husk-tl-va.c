@@ -163,7 +163,7 @@ static void format_into(sbuf *out, const char *fmt, tl_va_list *ap)
             case LEN_NONE: v = (int)(int32_t)raw; break;
             default: v = (long long)raw; break;
             }
-            memcpy(spec + sn, "lld", 4);
+            strcpy(spec + sn, "lld");
             int n = snprintf(tmp, sizeof(tmp), spec, v);
             sb_put(out, tmp, (size_t)(n < (int)sizeof(tmp) ? n : (int)sizeof(tmp) - 1));
             break;

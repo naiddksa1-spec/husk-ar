@@ -50,7 +50,7 @@ struct LibraryHome: View {
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
             }
-            .background(Color(uiColor: .systemBackground).ignoresSafeArea())
+            .background(Theme.bg.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: LibraryRoute.self) { route in
                 Group {
@@ -83,8 +83,8 @@ struct LibraryHome: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .center, spacing: 10) {
-                Text("Library")
-                    .font(.largeTitle.weight(.bold))
+                Text("Husk")
+                    .font(.largeTitle.weight(.heavy))
                 Spacer()
                 if side == .emulation, host.isReady {
                     HeaderButton(systemImage: "folder") { router.openFiles(at: FilesTab.root) }
@@ -96,6 +96,8 @@ struct LibraryHome: View {
                 .disabled(side == .translation && store.busy != nil)
                 .accessibilityLabel(side == .translation ? "Add a Game" : "Install an APK")
             }
+            Text(side == .translation ? "Your games. Ready to play." : "Your Android workspace.")
+                .font(.subheadline).foregroundStyle(.secondary)
             SearchField(text: $query, prompt: side == .translation ? "Search games" : "Search apps")
             SideSwitcher(side: $side)
         }
@@ -236,7 +238,7 @@ private func matches(_ query: String, _ names: String...) -> Bool {
 // MARK: - the grid
 
 /// The grid both pages lay their apps out on: as many columns as fit, with room around each icon.
-private let launcherColumns = [GridItem(.adaptive(minimum: 78, maximum: 110), spacing: 14, alignment: .top)]
+private let launcherColumns = [GridItem(.adaptive(minimum: 130, maximum: 180), spacing: 14, alignment: .top)]
 
 /// One app in the grid, as a home screen draws it: the icon, and its name under it. A caption only when there is
 /// something worth saying.
@@ -246,7 +248,7 @@ struct LauncherTile: View {
     var caption: String? = nil
     var dimmed = false
 
-    private let size: CGFloat = 64
+    private let size: CGFloat = 72
 
     var body: some View {
         VStack(spacing: 8) {
@@ -259,7 +261,7 @@ struct LauncherTile: View {
                 .opacity(dimmed ? 0.45 : 1)
             VStack(spacing: 2) {
                 Text(title)
-                    .font(.caption.weight(.medium))
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
@@ -273,6 +275,10 @@ struct LauncherTile: View {
             .frame(maxWidth: .infinity, alignment: .top)
         }
         .frame(maxWidth: .infinity)
+        .padding(.vertical, 20)
+        .padding(.horizontal, 10)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 24).stroke(Theme.accent.opacity(0.12), lineWidth: 1))
         .contentShape(Rectangle())
     }
 }

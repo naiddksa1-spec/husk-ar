@@ -59,9 +59,7 @@ xcodebuild -project "$HUSK_ROOT/src/app/Husk.xcodeproj" -scheme Husk \
 # it looks exactly like a fix that did not work.
 if ! grep -q "BUILD SUCCEEDED" "$DD/build.log"; then
     echo "build failed; refusing to package a stale app" >&2
-    grep -E "error:|undefined|duplicate" "$DD/build.log" | head -30 >&2
-    echo "--- tail of build log ---" >&2
-    tail -40 "$DD/build.log" >&2
+    grep -E "error:" "$DD/build.log" | head -10 >&2
     exit 1
 fi
 

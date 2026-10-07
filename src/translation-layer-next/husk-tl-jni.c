@@ -801,7 +801,7 @@ static void jni_GetStringUTFRegion(void *env, jo s, int32_t start, int32_t len, 
 {
     (void)env;
     size_t n; uint16_t *u = to_utf16(tl_jni_string(s) ? tl_jni_string(s) : "", &n);
-    if (start >= 0 && len >= 0 && (size_t)start <= n && (size_t)len <= n - (size_t)start) { char *o = from_utf16(u + start, (size_t)len); if (o) { memcpy(buf, o, strlen(o) + 1); free(o); } }
+    if (start >= 0 && len >= 0 && (size_t)(start + len) <= n) { char *o = from_utf16(u + start, (size_t)len); strcpy(buf, o); free(o); }
     free(u);
 }
 
