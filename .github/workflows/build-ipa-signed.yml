@@ -50,6 +50,11 @@ jobs:
       - name: Fetch guest images
         run: ./scripts/fetch_phase0_guest.sh
 
+      - name: Build MoltenVK for iOS
+        run: |
+          chmod +x scripts/build_moltenvk_ios.sh
+          ./scripts/build_moltenvk_ios.sh
+
       - name: Build and package IPA (unsigned)
         run: ./scripts/package_ipa.sh /tmp/ios-app-unsigned.ipa
 
