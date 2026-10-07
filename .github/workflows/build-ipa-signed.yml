@@ -21,7 +21,12 @@ jobs:
 
       - name: Select Xcode
         run: |
-          for X in /Applications/Xcode_26*.app /Applications/Xcode_17*.app /Applications/Xcode_16.4.app /Applications/Xcode.app; do if [ -d "$X" ]; then echo "trying $X"; sudo xcode-select -s "$X/Contents/Developer" && break; fi; done
+          ls -d /Applications/Xcode*.app 2>/dev/null
+          NEWEST=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)
+          echo "newest: $NEWEST"
+          sudo xcode-select -s "$NEWEST/Contents/Developer"
+          xcodebuild -version
+          swift --version
           xcodebuild -version
 
       - name: Install xcodegen
