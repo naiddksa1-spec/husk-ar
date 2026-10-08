@@ -36,6 +36,15 @@
 #include <mach/vm_map.h>
 #endif
 
+#if defined(__aarch64__) && !defined(__APPLE__)
+/* Linux has no sys_icache_invalidate; GCC/Clang provide the equivalent. */
+static void sys_icache_invalidate(void *address, size_t length)
+{
+    char *start = (char *)address;
+    __builtin___clear_cache(start, start + length);
+}
+#endif
+
 #include <errno.h>
 #include <pthread.h>
 #include <sched.h>

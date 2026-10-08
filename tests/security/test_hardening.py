@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib.util
 import json
 import plistlib
@@ -10,6 +11,7 @@ import re
 import subprocess
 import struct
 import sys
+import shutil
 import tarfile
 import tempfile
 import textwrap
@@ -115,7 +117,7 @@ def check_safe_extractor() -> None:
 def check_network_and_shell_boundaries() -> None:
     plist = plistlib.loads((APP / "Info.plist").read_bytes())
     assert "NSAppTransportSecurity" not in plist
-    assert plist.get("CFBundleShortVersionString") == "0.9.1"
+    assert plist.get("CFBundleShortVersionString") == "0.9.3"
 
     app_source = (APP / "AppSource.swift").read_text()
     assert 'components.scheme?.lowercased() == "https"' in app_source
@@ -129,7 +131,17 @@ def check_network_and_shell_boundaries() -> None:
     assert "replacingOccurrences(of: \"'\", with: \"'\\\\''\")" in bridge
     assert "pm uninstall \\(package)" not in bridge
     assert "monkey -p \\(pkg)" not in bridge
-    assert "BundleUnpacker.hasZIPSignature(at: url)" in bridge
+    install_start = bridge.index("func install(apkAt url: URL)")
+    install_end = bridge.index("\n    func launch(package:", install_start)
+    apk_import = bridge[install_start:install_end]
+    assert "read(upToCount: 1024 * 1024)" in apk_import
+    assert "copied <= maximumAPKBytes - count" in apk_import
+    assert "guard copied == size" in apk_import
+    assert "BundleUnpacker.hasZIPSignature(at: staging)" in apk_import
+    assert "defer { try? FileManager.default.removeItem(at: staging) }" in apk_import
+    assert apk_import.index("guard copied == size") < apk_import.index(
+        "BundleUnpacker.hasZIPSignature(at: staging)") < apk_import.index(
+            "moveItem(at: staging, to: dest)")
 
     runner = (APP / "QemuRunner.swift").read_text()
     assert "hostfwd=tcp:127.0.0.1:5599-:5599" in runner
@@ -160,8 +172,55 @@ def check_network_and_shell_boundaries() -> None:
 
     provision = cloud_init_content("/usr/local/bin/husk-provision.sh")
     firstboot = cloud_init_content("/usr/local/bin/husk-firstboot.sh")
+    phase1_fetch = (ROOT / "scripts/fetch_phase1_guest.sh").read_text()
     assert "waydroid init ||" not in firstboot
     assert "unzip -tq system.zip" in firstboot
+    system_sha = "c4b45fad36bee7c0db8a1d9315a5be0035520c53d3d005a807735ae9b7ee79cf"
+    vendor_sha = "1e6d33d464277ea3964e4658001c8882f21325616d6bcc66d473bc9ee1e246c7"
+    assert len(system_sha) == len(vendor_sha) == 64
+    assert system_sha in firstboot and vendor_sha in firstboot
+    assert system_sha in phase1_fetch and vendor_sha in phase1_fetch
+    assert "sha256sum --check --status" in firstboot
+    assert firstboot.index("verify_pinned_sha256 system.zip") < firstboot.index("unzip -tq system.zip")
+    assert firstboot.index("unzip -tq system.zip") < firstboot.index("waydroid init")
+    assert "verify_sha256 waydroid-system.zip" in phase1_fetch
+    assert "verify_sha256 waydroid-vendor.zip" in phase1_fetch
+    assert 'shasum -a 256 "$file"' in phase1_fetch
+    assert "verify_debian_sha512" in phase1_fetch and "SHA512SUMS" in phase1_fetch
+    if shutil.which("sha256sum"):
+        start = firstboot.index("verify_pinned_sha256() {")
+        end = firstboot.index("\n}", start) + 2
+        verifier = firstboot[start:end]
+        with tempfile.TemporaryDirectory(prefix="husk-hash-") as temp:
+            sample = Path(temp) / "system.zip"
+            sample.write_bytes(b"test image archive")
+            digest = hashlib.sha256(sample.read_bytes()).hexdigest()
+            invocation = verifier + '\nverify_pinned_sha256 "$1" "$2" fixture'
+            accepted = subprocess.run(
+                ["bash", "-c", invocation, "verify", str(sample), digest],
+                capture_output=True, text=True)
+            assert accepted.returncode == 0, accepted.stderr
+            rejected = subprocess.run(
+                ["bash", "-c", invocation, "verify", str(sample), "0" * 64],
+                capture_output=True, text=True)
+            assert rejected.returncode != 0, "altered image passed the pinned-hash check"
+    if shutil.which("shasum"):
+        start = phase1_fetch.index("verify_sha256() {")
+        end = phase1_fetch.index("\n}", start) + 2
+        verifier = phase1_fetch[start:end]
+        with tempfile.TemporaryDirectory(prefix="husk-host-hash-") as temp:
+            sample = Path(temp) / "waydroid-system.zip"
+            sample.write_bytes(b"test image archive")
+            digest = hashlib.sha256(sample.read_bytes()).hexdigest()
+            invocation = verifier + '\nverify_sha256 "$1" "$2"'
+            accepted = subprocess.run(
+                ["bash", "-c", invocation, "verify", str(sample), digest],
+                capture_output=True, text=True)
+            assert accepted.returncode == 0, accepted.stderr
+            rejected = subprocess.run(
+                ["bash", "-c", invocation, "verify", str(sample), "0" * 64],
+                capture_output=True, text=True)
+            assert rejected.returncode != 0, "altered guest image passed the host checksum guard"
     assert firstboot.rindex("waydroid init") < firstboot.index("touch /var/lib/husk-setup-complete.tmp")
     assert "Restart=on-failure" in cloud and "RestartSec=30" in cloud
     for embedded_script in (provision, firstboot):

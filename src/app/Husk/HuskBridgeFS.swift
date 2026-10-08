@@ -174,16 +174,13 @@ final class HuskBridgeFS: ObservableObject {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         let sourceName = url.lastPathComponent
+        let maximumAPKBytes: Int64 = 2 * 1024 * 1024 * 1024
         guard url.pathExtension.lowercased() == "apk",
               let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
               (attributes[.type] as? FileAttributeType) == .typeRegular,
               let size = (attributes[.size] as? NSNumber)?.int64Value,
-              size > 0, size <= 2 * 1024 * 1024 * 1024 else {
+              size > 0, size <= maximumAPKBytes else {
             lastAgentMessage = "Choose a regular APK no larger than 2 GiB."
-            return
-        }
-        guard BundleUnpacker.hasZIPSignature(at: url) else {
-            lastAgentMessage = "This file is not a readable ZIP-based APK."
             return
         }
         if let fileSystem = try? FileManager.default.attributesOfFileSystem(forPath: shareRoot.path),
@@ -202,15 +199,52 @@ final class HuskBridgeFS: ObservableObject {
         // never see a half-copied APK and try to install it.
         let staging = shareRoot.appendingPathComponent(stagingName)
         let dest = inbox.appendingPathComponent(name)
+        // Validate the staged bytes, not the provider URL: the document can change
+        // between a preflight check and coordinated access. Stream with a hard cap
+        // so a changed file cannot consume unbounded storage while it is copied.
+        defer { try? FileManager.default.removeItem(at: staging) }
         do {
             try FileManager.default.createDirectory(at: inbox, withIntermediateDirectories: true)
             var coordinationError: NSError?
             var copyError: Error?
             NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordinationError) { readable in
-                do { try FileManager.default.copyItem(at: readable, to: staging) }
-                catch { copyError = error }
+                do {
+                    guard FileManager.default.createFile(atPath: staging.path, contents: nil) else {
+                        throw CocoaError(.fileWriteUnknown)
+                    }
+                    let input = try FileHandle(forReadingFrom: readable)
+                    defer { try? input.close() }
+                    let output = try FileHandle(forWritingTo: staging)
+                    defer { try? output.close() }
+
+                    var copied: Int64 = 0
+                    while let chunk = try input.read(upToCount: 1024 * 1024), !chunk.isEmpty {
+                        let count = Int64(chunk.count)
+                        guard copied <= maximumAPKBytes - count else {
+                            throw NSError(domain: "com.husk.import", code: 1,
+                                          userInfo: [NSLocalizedDescriptionKey: "The APK changed or exceeds the 2 GiB import limit."])
+                        }
+                        try output.write(contentsOf: chunk)
+                        copied += count
+                    }
+                    try output.synchronize()
+                    guard copied == size else {
+                        throw NSError(domain: "com.husk.import", code: 2,
+                                      userInfo: [NSLocalizedDescriptionKey: "The APK changed while it was being imported. Choose it again."])
+                    }
+                } catch {
+                    copyError = error
+                }
             }
             if let error = coordinationError ?? copyError { throw error }
+            guard let stagedAttributes = try? FileManager.default.attributesOfItem(atPath: staging.path),
+                  (stagedAttributes[.type] as? FileAttributeType) == .typeRegular,
+                  let stagedSize = (stagedAttributes[.size] as? NSNumber)?.int64Value,
+                  stagedSize > 0, stagedSize <= maximumAPKBytes,
+                  BundleUnpacker.hasZIPSignature(at: staging) else {
+                throw NSError(domain: "com.husk.import", code: 3,
+                              userInfo: [NSLocalizedDescriptionKey: "This file is not a readable ZIP-based APK."])
+            }
             try FileManager.default.moveItem(at: staging, to: dest)
             pendingInstalls.insert(name)
             HuskLog.log("bridge", "queued \(name) for install "

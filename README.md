@@ -96,8 +96,8 @@ debugger. Husk can get it in several ways, and walks you through each one
 
 The iOS application itself cannot be built on Linux. The offline test suite
 does run on Linux or macOS and checks archive limits, guest-agent input
-validation, repository download/error paths, asset catalogs, shell/Python
-syntax, and the translation-layer host tests:
+validation, repository download/error paths, guest-image checksum guards,
+asset catalogs, shell/Python syntax, and the translation-layer host tests:
 
 ```sh
 ./tests/run.sh

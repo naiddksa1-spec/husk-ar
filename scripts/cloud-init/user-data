@@ -144,6 +144,18 @@ write_files:
       # serves these at ~0.28 MB/s against GitHub's ~26 MB/s -- the difference
       # between about an hour and under a minute for the same bytes.
       BASE="https://github.com/Leviidev/Husk/releases/download/android-v1"
+      # SHA-256 from Waydroid's official OTA metadata for the exact 2026-04-03
+      # artifacts mirrored above. Waydroid's updater verifies the OTA `id` as
+      # SHA-256; pinning also protects this faster mirror path.
+      SYSTEM_SHA256="c4b45fad36bee7c0db8a1d9315a5be0035520c53d3d005a807735ae9b7ee79cf"
+      VENDOR_SHA256="1e6d33d464277ea3964e4658001c8882f21325616d6bcc66d473bc9ee1e246c7"
+      verify_pinned_sha256() {
+          local file="$1" expected="$2" label="$3"
+          if ! printf '%s  %s\n' "$expected" "$file" | sha256sum --check --status; then
+              echo "HUSK-SETUP: $label SHA-256 mismatch; refusing the image"
+              return 1
+          fi
+      }
 
       fetch() {
           local url="$1" out="$2" label="$3"
@@ -162,6 +174,11 @@ write_files:
 
       if fetch "$BASE/system.zip" system.zip "Android system" && \
          fetch "$BASE/vendor.zip" vendor.zip "Android vendor"; then
+          if ! verify_pinned_sha256 system.zip "$SYSTEM_SHA256" "Android system" || \
+             ! verify_pinned_sha256 vendor.zip "$VENDOR_SHA256" "Android vendor"; then
+              rm -f system.zip vendor.zip
+              exit 1
+          fi
           if ! unzip -tq system.zip >/dev/null || ! unzip -tq vendor.zip >/dev/null; then
               echo "HUSK-SETUP: downloaded image archive is corrupt; removing it for retry"
               rm -f system.zip vendor.zip

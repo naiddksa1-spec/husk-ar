@@ -1,0 +1,73 @@
+== security and guest-agent regression checks
+ok   check_safe_extractor
+ok   check_network_and_shell_boundaries
+ok   check_zip_and_build_guards
+ok   check_asset_catalog
+passed 4 security regression groups
+== shell syntax
+checked Python syntax in 5 files
+== translation-layer host tests
+== page planner
+ok   4k layout on 4k pages: RXRW
+ok   4k layout on 16k pages: !
+ok   16k layout on 16k pages: RXRW
+ok   code with RELRO on one page: XW
+ok   same, without RELRO: !W
+ok   RELRO in the middle: XWRW
+ok   bss spans pages: XWWW
+ok   hole: X--W
+ok   bad layouts refused
+all passed
+== scanner
+ok   java: verdict
+ok   java: dex counted
+ok   java: .so outside lib/ ignored
+ok   good: verdict
+ok   good: abis
+ok   good: only arm64 analysed
+ok   good: status ok
+ok   good: 16k aligned, no conflict
+ok   good: APS2 recognised
+ok   good: APS2 decode matches llvm-readelf
+ok   good: APS2 decode matches the unpacked build
+ok   good: TLS seen
+ok   good: imports match llvm-readelf
+ok   good: needed
+ok   good: soname
+ok   good: system libraries
+ok   relr: recognised
+ok   relr: count matches llvm-readelf
+ok   old: verdict
+ok   old: 4k page conflict found
+ok   old: status work
+ok   old: layout marks the conflict
+ok   svc: one system call
+ok   svc: thread-register write
+ok   svc: stack-guard reads match llvm-objdump
+ok   svc: notes explain
+ok   v7: 32-bit ARM only
+ok   x86: needs a translator
+ok   split: base and config merged
+ok   engine: Unity IL2CPP
+ok   fake: not ELF is blocked
+ok   fake: wrong machine is blocked
+ok   fake: verdict
+ok   zip64: read
+ok   unreadable: truncated.apk
+ok   unreadable: notzip.apk
+ok   unreadable: missing.apk
+ok   entry: deflated manifest round-trips
+ok   entry: stored library round-trips
+ok   entry: limit enforced
+ok   entry: missing entry
+all passed
+== device checks, arm64 under qemu-user
+ok   page size reported
+ok   tpidr: owned by glibc, left alone
+ok   x18: Apple-only
+ok   carve: generated code ran beside carved data
+ok   place: code placed before data ran
+ok   dualmap: honestly not measured
+ok   noexec: nothing executed
+all passed
+all available portable tests passed; skipped device tests remain unverified
