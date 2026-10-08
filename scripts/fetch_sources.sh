@@ -11,16 +11,40 @@ fetch() {
     local url="$1" file="$DL/$(basename "$1")"
     if [ -s "$file" ]; then echo "[skip] $(basename "$file")"; return 0; fi
     echo "[get ] $(basename "$file")"
-    curl -fL --retry 3 --retry-delay 5 -o "$file.part" "$url" || { echo "[FAIL] $url"; return 1; }
+    curl --proto '=https' --proto-redir '=https' -fL --retry 3 --retry-delay 5 \
+        -o "$file.part" "$url" || { echo "[FAIL] $url"; return 1; }
     mv "$file.part" "$file"
 }
 
 unpack() {
-    local file="$DL/$(basename "$1")" stamp
+    local file="$DL/$(basename "$1")" stamp stage item target
     stamp="$SRC/.unpacked-$(basename "$file")"
     [ -f "$stamp" ] && { echo "[skip] unpack $(basename "$file")"; return 0; }
-    echo "[tar ] $(basename "$file")"
-    tar -xf "$file" -C "$SRC" || return 1
+    echo "[safe] $(basename "$file")"
+    stage="$(mktemp -d "$SRC/.extract.XXXXXX")" || return 1
+    if ! python3 "$HUSK_ROOT/scripts/safe_extract_tar.py" "$file" "$stage"; then
+        rm -rf -- "$stage"
+        return 1
+    fi
+    shopt -s dotglob nullglob
+    local -a entries=("$stage"/*)
+    if [ "${#entries[@]}" -eq 0 ]; then
+        echo "[FAIL] archive was empty: $file" >&2
+        rm -rf -- "$stage"
+        return 1
+    fi
+    for item in "${entries[@]}"; do
+        target="$SRC/$(basename "$item")"
+        if [ -e "$target" ] || [ -L "$target" ]; then
+            echo "[FAIL] refusing to replace existing source path: $target" >&2
+            rm -rf -- "$stage"
+            return 1
+        fi
+    done
+    for item in "${entries[@]}"; do
+        mv -- "$item" "$SRC/" || { rm -rf -- "$stage"; return 1; }
+    done
+    rm -rf -- "$stage"
     touch "$stamp"
 }
 

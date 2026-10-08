@@ -13,6 +13,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <zlib.h>
 
 /* Mirrors HuskFrameInfo in husk-display.h. */
 typedef struct HuskFrameInfo {

@@ -122,10 +122,15 @@ import UserNotifications
     /// Stops a pairing in progress. `reason` is shown as the failure; nil returns to idle.
     func cancel(reason: String? = nil) {
         guard let session else { return }
+        deadline?.invalidate()
+        deadline = nil
         husk_rppairing_cancel(session)
         stopAdvertising()
         phase = reason.map(Phase.failed) ?? .idle
         log(reason == nil ? "cancelled" : "stopped")
+        // The accept thread owns the C session until it returns; finished()
+        // frees it. End only the app's background leases here.
+        endBackground(success: false)
     }
 
     /// Forget a finished or failed attempt so the walkthrough starts clean.
@@ -175,6 +180,8 @@ import UserNotifications
     }
 
     private func fail(_ message: String) {
+        deadline?.invalidate()
+        deadline = nil
         if let session { husk_rppairing_cancel(session) }
         stopAdvertising()
         phase = .failed(message)

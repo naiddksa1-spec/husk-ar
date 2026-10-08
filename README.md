@@ -92,9 +92,29 @@ debugger. Husk can get it in several ways, and walks you through each one
 
 ## Building
 
-Husk is built on a Mac with Xcode. The build scripts also call `meson`,
-`ninja`, `pkg-config`, `python3`, `xcodegen`, `qemu-img` and a Rust
-toolchain with the `aarch64-apple-ios` target.
+### Portable checks
+
+The iOS application itself cannot be built on Linux. The offline test suite
+does run on Linux or macOS and checks archive limits, guest-agent input
+validation, repository download/error paths, asset catalogs, shell/Python
+syntax, and the translation-layer host tests:
+
+```sh
+./tests/run.sh
+```
+
+### Build the iOS app
+
+Husk is built on a Mac with a full Xcode installation and the iPhoneOS SDK.
+The build also needs `xcodegen`, `meson`, `ninja`, `pkg-config`, `python3`,
+`git`, `make`, `curl`, `bunzip2`, `qemu-img`, `patch`, and Rust (`cargo`,
+`rustc`, `rustup`) with the `aarch64-apple-ios` target installed. Run the
+preflight independently to check these prerequisites without downloading
+dependencies or changing build outputs:
+
+```sh
+./scripts/preflight.sh
+```
 
 ```sh
 ./scripts/ci_build.sh

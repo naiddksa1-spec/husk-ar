@@ -8,7 +8,22 @@
 #
 # Usage: ./scripts/build_ios.sh [stage ...]      (no args = all stages)
 #        stages: libffi glib pixman libucontext libslirp qemu
-set -uo pipefail
+set -euo pipefail
+
+if [ "$(uname -s)" != "Darwin" ]; then
+    echo "error: Husk's iOS build requires macOS and the Apple iOS SDK; no files were changed." >&2
+    exit 2
+fi
+for tool in xcrun xcodebuild sysctl meson ninja pkg-config python3 git make; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        echo "error: required build tool '$tool' was not found. Install Xcode command line tools and the Husk build dependencies." >&2
+        exit 2
+    fi
+done
+if ! xcode-select -p >/dev/null 2>&1; then
+    echo "error: select a full Xcode installation before building (xcode-select -p failed)." >&2
+    exit 2
+fi
 
 HUSK_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$HUSK_ROOT/third_party/build"

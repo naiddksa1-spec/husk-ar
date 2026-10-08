@@ -9,7 +9,7 @@ import UIKit
 /// states and links are tinted with. It is applied once at the root with `.tint(...)`, which SwiftUI
 /// hands down to every control, so no screen has to know about it.
 ///
-/// Husk's own indigo, the colour of its icon, is the default; it is a preset like any other.
+/// Husk's new deep teal is the default; it remains editable from Appearance settings.
 final class AppTheme: ObservableObject {
     static let shared = AppTheme()
 
@@ -19,7 +19,7 @@ final class AppTheme: ObservableObject {
         let color: Color
     }
 
-    static let husk = Color(red: 0.353, green: 0.322, blue: 0.945)
+    static let husk = Color(red: 0.035, green: 0.43, blue: 0.56)
 
     static let presets: [Preset] = [
         Preset(id: "husk", name: "Husk", color: husk),

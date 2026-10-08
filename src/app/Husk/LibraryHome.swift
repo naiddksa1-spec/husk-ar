@@ -50,7 +50,7 @@ struct LibraryHome: View {
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
             }
-            .background(Color(uiColor: .systemBackground).ignoresSafeArea())
+            .background(Theme.backdrop)
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: LibraryRoute.self) { route in
                 Group {
@@ -81,10 +81,21 @@ struct LibraryHome: View {
     // MARK: header
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 13) {
             HStack(alignment: .center, spacing: 10) {
-                Text("Library")
-                    .font(.largeTitle.weight(.bold))
+                HStack(spacing: 11) {
+                    HuskMark(size: 40)
+                        .shadow(color: Theme.accent.opacity(0.22), radius: 8, y: 3)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("HUSK")
+                            .font(.system(size: 10, weight: .heavy, design: .rounded))
+                            .tracking(2.2)
+                            .foregroundStyle(Theme.accent)
+                        Text("Library")
+                            .font(.system(size: 29, weight: .bold, design: .rounded))
+                            .tracking(-0.7)
+                    }
+                }
                 Spacer()
                 if side == .emulation, host.isReady {
                     HeaderButton(systemImage: "folder") { router.openFiles(at: FilesTab.root) }
@@ -100,8 +111,8 @@ struct LibraryHome: View {
             SideSwitcher(side: $side)
         }
         .padding(.horizontal, 20)
-        .padding(.top, 8)
-        .padding(.bottom, 6)
+        .padding(.top, 6)
+        .padding(.bottom, 8)
     }
 
     private func addGames() {
@@ -136,14 +147,14 @@ private struct SideSwitcher: View {
                 } label: {
                     Text(option.title)
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(side == option ? Color.primary : Color.secondary)
+                        .foregroundStyle(side == option ? Color.white : Theme.textDim)
                         .frame(maxWidth: .infinity)
                         .frame(height: 34)
                         .background {
                             if side == option {
                                 Capsule()
-                                    .fill(Color(uiColor: .secondarySystemGroupedBackground))
-                                    .shadow(color: .black.opacity(0.10), radius: 3, y: 1)
+                                    .fill(Theme.brandGradient)
+                                    .shadow(color: Theme.accent.opacity(0.24), radius: 7, y: 3)
                                     .matchedGeometryEffect(id: "selected", in: selection)
                             }
                         }
@@ -153,7 +164,8 @@ private struct SideSwitcher: View {
             }
         }
         .padding(3)
-        .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
+        .background(Theme.surfaceHigh, in: Capsule())
+        .overlay(Capsule().stroke(Theme.hairline.opacity(0.55), lineWidth: 0.6))
         .animation(.snappy(duration: 0.28), value: side)
     }
 }
@@ -167,10 +179,19 @@ private struct HeaderButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(enabled ? Color.accentColor : Color.secondary)
-                .frame(width: 36, height: 36)
-                .background(Color(uiColor: .tertiarySystemFill), in: Circle())
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(systemImage == "plus" && enabled ? Color.white : Theme.accent)
+                .frame(width: 42, height: 42)
+                .background {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(systemImage == "plus" && enabled
+                              ? AnyShapeStyle(Theme.brandGradient)
+                              : AnyShapeStyle(Theme.surface))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(Theme.hairline.opacity(0.6), lineWidth: 0.6)
+                        }
+                }
         }
         .buttonStyle(.plain)
     }
@@ -202,8 +223,10 @@ private struct SearchField: View {
                 }
             }
             .padding(.horizontal, 10)
-            .frame(height: 36)
-            .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .frame(height: 40)
+            .background(Theme.surfaceHigh, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .stroke(Theme.hairline.opacity(0.45), lineWidth: 0.6))
             if focused {
                 Button("Cancel") { text = ""; focused = false }
                     .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -246,20 +269,20 @@ struct LauncherTile: View {
     var caption: String? = nil
     var dimmed = false
 
-    private let size: CGFloat = 64
+    private let size: CGFloat = 72
 
     var body: some View {
         VStack(spacing: 8) {
             AppIcon(path: iconPath, size: size)
                 .overlay {
                     RoundedRectangle(cornerRadius: size * 0.225, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+                        .strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.6)
                 }
                 .shadow(color: .black.opacity(0.12), radius: 6, y: 3)
                 .opacity(dimmed ? 0.45 : 1)
             VStack(spacing: 2) {
                 Text(title)
-                    .font(.caption.weight(.medium))
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
                     .foregroundStyle(.primary)
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
@@ -446,12 +469,13 @@ private struct AndroidCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 14) {
-                Image(systemName: "apps.iphone")
-                    .font(.system(size: 24, weight: .medium))
-                    .foregroundStyle(Color.accentColor)
+                Image(systemName: "cpu.fill")
+                    .font(.system(size: 23, weight: .semibold))
+                    .foregroundStyle(.white)
                     .frame(width: 52, height: 52)
-                    .background(Color.accentColor.opacity(0.14),
-                                in: RoundedRectangle(cornerRadius: 52 * 0.225, style: .continuous))
+                    .background(Theme.brandGradient,
+                                in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+                    .shadow(color: Theme.accent.opacity(0.23), radius: 9, y: 4)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Android").font(.headline)
                     HStack(spacing: 6) {
@@ -477,7 +501,16 @@ private struct AndroidCard: View {
             }
         }
         .padding(16)
-        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .background {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(LinearGradient(colors: [Theme.accent.opacity(0.11), Theme.surface, Theme.surface],
+                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke(Theme.accent.opacity(0.18), lineWidth: 0.8)
+                }
+        }
+        .shadow(color: Theme.shadow.opacity(0.22), radius: 16, y: 8)
         .animation(.easeInOut(duration: 0.2), value: status)
     }
 
@@ -549,7 +582,10 @@ private struct AndroidCard: View {
                 .foregroundStyle(prominent ? Color.white : Color.accentColor)
                 .padding(.horizontal, 16)
                 .frame(height: 32)
-                .background(prominent ? Color.accentColor : Color(uiColor: .tertiarySystemFill), in: Capsule())
+                .background {
+                    Capsule().fill(prominent ? AnyShapeStyle(Theme.brandGradient)
+                                             : AnyShapeStyle(Theme.surfaceHigh))
+                }
         }
         .buttonStyle(CardButtonStyle())
     }

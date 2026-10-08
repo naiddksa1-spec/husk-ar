@@ -64,10 +64,25 @@ struct DiscoverView: View {
 
     private var list: some View {
         List {
-            ForEach(manager.sources) { source in
-                let filtered = filteredApps(for: source)
-                if !filtered.isEmpty {
-                    sourceSection(source, apps: filtered)
+            if !debouncedSearchText.isEmpty && !hasSearchResults {
+                Section {
+                    VStack(spacing: 10) {
+                        Label("No Apps Found", systemImage: "magnifyingglass")
+                            .font(.headline)
+                        Text("Try another name or package identifier.")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                        Button("Clear Search") { searchText = "" }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .multilineTextAlignment(.center)
+                    .padding(.vertical, 20)
+                }
+            } else {
+                ForEach(manager.sources) { source in
+                    let filtered = filteredApps(for: source)
+                    if !filtered.isEmpty {
+                        sourceSection(source, apps: filtered)
+                    }
                 }
             }
             if !manager.fetchErrors.isEmpty {
@@ -88,6 +103,10 @@ struct DiscoverView: View {
 
     private var totalAppCount: Int {
         manager.sources.reduce(0) { $0 + $1.apps.count }
+    }
+
+    private var hasSearchResults: Bool {
+        manager.sources.contains { !filteredApps(for: $0).isEmpty }
     }
 
     // MARK: - Helpers
@@ -132,6 +151,9 @@ struct DiscoverView: View {
                 Text(app.name).font(.body.weight(.medium)).lineLimit(1)
                 Text(app.localizedDescription)
                     .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                if let error = manager.downloadErrors[app.bundleIdentifier] {
+                    Text(error).font(.caption2).foregroundStyle(.red).lineLimit(2)
+                }
             }
 
             Spacer(minLength: 8)
@@ -141,20 +163,29 @@ struct DiscoverView: View {
 
             if isInstalled {
                 Button("Open") {
-                    let intent = "am start -n \(app.bundleIdentifier)/\(app.bundleIdentifier).MainActivity"
-                    _ = try? GuestBridge.shared.shell(intent, timeout: 5)
+                    host.launch(app.bundleIdentifier) {}
                 }
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.capsule)
+                .disabled(!host.isReady || host.busy != nil)
+            } else if let error = manager.downloadErrors[app.bundleIdentifier] {
+                Button("Retry") { manager.downloadAndInstall(app: app) }
+                    .buttonStyle(.borderedProminent)
+                    .buttonBorderShape(.capsule)
+                    .accessibilityLabel("Retry downloading \(app.name): \(error)")
             } else if let progress = progress {
-                ZStack {
-                    Circle().stroke(Color(uiColor: .tertiarySystemFill), lineWidth: 3)
-                    Circle().trim(from: 0, to: progress)
-                        .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                    Image(systemName: "stop.fill").font(.system(size: 9)).foregroundStyle(.secondary)
+                Button { manager.cancelDownload(bundleIdentifier: app.bundleIdentifier) } label: {
+                    ZStack {
+                        Circle().stroke(Color(uiColor: .tertiarySystemFill), lineWidth: 3)
+                        Circle().trim(from: 0, to: progress)
+                            .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                        Image(systemName: "stop.fill").font(.system(size: 9)).foregroundStyle(.secondary)
+                    }
+                    .frame(width: 28, height: 28)
                 }
-                .frame(width: 28, height: 28)
+                .buttonStyle(.plain)
+                .accessibilityLabel("Cancel download of \(app.name)")
             } else {
                 Button("Get") { manager.downloadAndInstall(app: app) }
                     .buttonStyle(.borderedProminent)
@@ -176,7 +207,7 @@ struct DiscoverView: View {
                 } header: {
                     Text("Source URL")
                 } footer: {
-                    Text("Paste any F-Droid-compatible repository index URL.")
+                    Text("HTTPS repository indexes only. F-Droid-compatible sources are supported.")
                 }
 
                 Section("Presets") {
@@ -211,7 +242,7 @@ struct DiscoverView: View {
                         let url = newSourceURL
                         newSourceURL = ""
                         showingAddSource = false
-                        guard !url.isEmpty, URL(string: url) != nil else { return }
+                        guard !url.isEmpty else { return }
                         Task { await manager.addSource(urlString: url) }
                     }
                     .disabled(newSourceURL.isEmpty)
@@ -237,7 +268,10 @@ struct DiscoverView: View {
                         }
                         .padding(.vertical, 2)
                     }
-                    .onDelete { manager.sourceURLs.remove(atOffsets: $0) }
+                    .onDelete { offsets in
+                        let removed = offsets.map { manager.sourceURLs[$0] }
+                        removed.forEach { manager.removeSource(urlString: $0) }
+                    }
                 } header: { Text("Active Repositories") }
             }
             .navigationTitle("Repositories")

@@ -9,6 +9,7 @@ struct SettingsTab: View {
             List {
                 Section {
                     NavigationLink { AboutSettings() } label: { appCard }
+                        .listRowBackground(Theme.surface)
                 }
 
                 Section {
@@ -33,6 +34,9 @@ struct SettingsTab: View {
                 }
             }
             .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(Theme.backdrop)
+            .tint(Theme.accent)
             .navigationTitle("Settings")
         }
     }
@@ -41,13 +45,14 @@ struct SettingsTab: View {
         HStack(spacing: 14) {
             HuskMark(size: 56)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Husk").font(.title3.weight(.semibold))
+                Text("Husk").font(.title3.weight(.bold)).foregroundStyle(.white)
                 Text("Version \(Bundle.main.version) · \(Bundle.main.commit)")
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.white.opacity(0.82))
             }
         }
-        .padding(.vertical, 6)
+        .padding(14)
+        .background(Theme.brandGradient, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     private func row<D: View>(_ destination: D, _ icon: String, _ tint: Color,

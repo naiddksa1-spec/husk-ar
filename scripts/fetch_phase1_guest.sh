@@ -30,7 +30,8 @@ get() {
     local url="$1" file="$2"
     if [ -s "$file" ]; then echo "[skip] $file"; return 0; fi
     echo "[get ] $file"
-    curl -fL --retry 3 --retry-delay 5 -o "$file.part" "$url"
+    curl --proto '=https' --proto-redir '=https' -fL --retry 3 --retry-delay 5 \
+        -o "$file.part" "$url"
     mv "$file.part" "$file"
 }
 

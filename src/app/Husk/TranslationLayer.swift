@@ -59,11 +59,21 @@ extension TLReport {
     /// runtime existed still says "needs work", so the app judges by the engine, not by the stored words.
     var runsOnNativeRuntime: Bool { nativeEngine != nil }
 
+    /// arm64 machine code alone is not enough: Husk must also have a driver for
+    /// the app's Android activity/framework lifecycle before it can start it.
+    var hasArm64WithoutDriver: Bool {
+        ok && abis.contains("arm64-v8a") && nativeEngine == nil
+    }
+
     /// "Unity" or "Cocos2d-x", for words on screen.
     var nativeEngineName: String { nativeEngine == .cocos ? "Cocos2d-x" : nativeEngine == .minecraft ? "Minecraft" : nativeEngine == .sdl ? "SDL" : nativeEngine == .ue4 ? "Unreal Engine" : nativeEngine == .gta ? "Rockstar" : nativeEngine == .nativeactivity ? "NativeActivity" : "Unity" }
 
     var displaySummary: String {
-        guard runsOnNativeRuntime else { return summary }
+        guard runsOnNativeRuntime else {
+            guard hasArm64WithoutDriver else { return summary }
+            let detected = engine.map { "\($0) was detected. " } ?? ""
+            return "\(summary) \(detected)Husk does not have a native driver for this app yet; use Emulation if available."
+        }
         let flagged = libraries.filter { $0.abi == "arm64-v8a" && $0.status != "ok" }.count
         let total = libraries.filter { $0.abi == "arm64-v8a" }.count
         var text = "A \(nativeEngineName) game. It runs through Husk's native runtime, which loads its \(total) arm64 libraries itself."
@@ -302,6 +312,7 @@ final class TranslationLayerStore: ObservableObject {
         let fm = FileManager.default
         let dir = TranslationLayer.root.appendingPathComponent(UUID().uuidString,
                                                                isDirectory: true)
+        var totalAPKBytes: Int64 = 0
         do {
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
             for url in urls {
@@ -315,8 +326,27 @@ final class TranslationLayerStore: ObservableObject {
                     if move { try? fm.removeItem(at: url) }
                     continue
                 }
-                var name = url.lastPathComponent
-                if !name.lowercased().hasSuffix(".apk") { name += ".apk" }
+                guard url.pathExtension.lowercased() == "apk",
+                      let attributes = try? fm.attributesOfItem(atPath: url.path),
+                      (attributes[.type] as? FileAttributeType) == .typeRegular,
+                      let size = (attributes[.size] as? NSNumber)?.int64Value,
+                      size > 0, size <= 2 * 1024 * 1024 * 1024,
+                      totalAPKBytes <= 3 * 1024 * 1024 * 1024 - size else {
+                    throw NSError(domain: "Husk.Import", code: 1,
+                                  userInfo: [NSLocalizedDescriptionKey:
+                                    "Choose regular APK files up to 2 GiB each and 3 GiB total."])
+                }
+                guard BundleUnpacker.hasZIPSignature(at: url) else {
+                    throw NSError(domain: "Husk.Import", code: 2,
+                                  userInfo: [NSLocalizedDescriptionKey: "An imported file is not a ZIP-based APK."])
+                }
+                totalAPKBytes += size
+                let leaf = url.deletingPathExtension().lastPathComponent
+                let clean = leaf.unicodeScalars.map { scalar -> String in
+                    CharacterSet.alphanumerics.contains(scalar) || "-_.".unicodeScalars.contains(scalar)
+                        ? String(scalar) : "_"
+                }.joined()
+                let name = "\(clean.prefix(180)).apk"
                 let dest = dir.appendingPathComponent(name)
                 if move {
                     try fm.moveItem(at: url, to: dest)
@@ -540,6 +570,11 @@ struct TLVerdict {
             title = "\(report!.nativeEngineName): native runtime"; tint = Theme.good
             return
         }
+        if report?.hasArm64WithoutDriver == true {
+            let engine = report?.engine.map { " for \($0)" } ?? ""
+            title = "No native driver\(engine)"; tint = .orange
+            return
+        }
         switch report?.verdict {
         case "java"?:           title = "Java only";                    tint = Theme.good
         case "native"?:         title = "Native code, maps cleanly";    tint = Theme.good
@@ -626,13 +661,16 @@ struct TLAppReportView: View {
                             .foregroundStyle(Theme.textDim.opacity(0.5))
                     }
                 }
+                .disabled(app.report?.nativeEngine == nil)
                 NavigationLink {
                     TLAppSettingsView(app: app)
                 } label: {
                     Label("Settings", systemImage: "gearshape")
                 }
             } footer: {
-                if devInfo {
+                if app.report?.nativeEngine == nil {
+                    Text("Husk does not have a native runtime driver for this app yet. Try Emulation if the app is installed there.")
+                } else if devInfo {
                     Text("Loads arm64 native code into JIT memory on Apple Silicon and drives "
                        + "a NativeActivity lifecycle. Apps with Java/Dex require ART (milestone 2).")
                 } else {
@@ -1035,4 +1073,3 @@ struct TLClassicAttemptView: View {
         }
     }
 }
-

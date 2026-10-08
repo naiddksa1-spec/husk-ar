@@ -31,6 +31,10 @@ enum Theme {
     /// The user's accent: what is pressed, selected or switched on.
     static var accent: Color { AppTheme.shared.accentColor }
     static var accentSoft: Color { AppTheme.shared.accentColor.opacity(0.16) }
+    static var brandGradient: LinearGradient {
+        LinearGradient(colors: [accent, Color(red: 0.18, green: 0.31, blue: 0.82)],
+                       startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
     static let good = Color(uiColor: .systemGreen)
     /// What a floating thing casts.
     static let shadow = Color.black.opacity(0.25)
@@ -78,10 +82,17 @@ enum Theme {
         }
     }
 
-    static let cardCorner: CGFloat = 14
-    static let rowCorner: CGFloat = 12
+    static let cardCorner: CGFloat = 22
+    static let rowCorner: CGFloat = 16
 
-    static var backdrop: some View { bg.ignoresSafeArea() }
+    static var backdrop: some View {
+        ZStack {
+            bg
+            LinearGradient(colors: [accent.opacity(0.075), .clear, bg.opacity(0.35)],
+                           startPoint: .topLeading, endPoint: .bottomTrailing)
+        }
+        .ignoresSafeArea()
+    }
 }
 
 extension View {
@@ -89,6 +100,7 @@ extension View {
     @ViewBuilder
     func huskCard<S: Shape>(_ shape: S, high: Bool = false) -> some View {
         self.background(high ? Theme.surfaceHigh : Theme.surface, in: shape)
+            .overlay(shape.stroke(Theme.hairline.opacity(0.45), lineWidth: 0.7))
     }
 
     func huskCard(high: Bool = false) -> some View {
@@ -129,7 +141,8 @@ struct PrimaryButtonStyle: ButtonStyle {
             .foregroundStyle(enabled ? .white : Theme.textDim)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 15)
-            .background(enabled ? Theme.accent : Theme.surfaceHigh,
+            .background(enabled ? Theme.brandGradient : LinearGradient(colors: [Theme.surfaceHigh, Theme.surfaceHigh],
+                                                                       startPoint: .top, endPoint: .bottom),
                         in: RoundedRectangle(cornerRadius: 15, style: .continuous))
             .opacity(configuration.isPressed ? 0.85 : 1)
             .scaleEffect(configuration.isPressed ? 0.985 : 1)
@@ -159,7 +172,8 @@ struct CircleButton: View {
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(active ? .white : Theme.text)
                 .frame(width: 36, height: 36)
-                .background(active ? Theme.accent : Theme.surfaceHigh, in: Circle())
+                .background(active ? Theme.brandGradient : LinearGradient(colors: [Theme.surfaceHigh, Theme.surfaceHigh],
+                                                                           startPoint: .top, endPoint: .bottom), in: Circle())
         }
         .buttonStyle(.plain)
     }
