@@ -82,7 +82,6 @@ struct GuestManifest: Codable, Equatable {
                 return nil
             }
             let manifest = try JSONDecoder().decode(GuestManifest.self, from: data)
-            guard manifest.isValid else { return nil }
             HuskLog.log("guest", "manifest \(manifest.generation): image "
                       + "\(manifest.image.sha256.prefix(12))…, snapshot "
                       + "\(manifest.snapshot.sha256.prefix(12))…")
@@ -91,28 +90,6 @@ struct GuestManifest: Codable, Equatable {
             HuskLog.log("guest", "manifest fetch failed: \(error.localizedDescription)")
             return nil
         }
-    }
-
-    private var isValid: Bool {
-        func filename(_ name: String) -> Bool {
-            !name.isEmpty && name.utf8.count <= 255 && name != "." && name != ".."
-                && name.unicodeScalars.allSatisfy {
-                    CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-").contains($0)
-                }
-        }
-        func digest(_ value: String) -> Bool {
-            value.count == 64 && value.allSatisfy { $0.isHexDigit && $0.isASCII }
-        }
-        return filename(image.file) && image.size > 0 && image.size <= 16_000_000_000
-            && digest(image.sha256) && digest(snapshot.sha256)
-            && snapshot.size > 0 && snapshot.size <= 16_000_000_000
-            && !snapshot.parts.isEmpty && snapshot.parts.count <= 64
-            && snapshot.parts.allSatisfy(filename)
-            && Set(snapshot.parts).count == snapshot.parts.count
-            && (256...8192).contains(snapshot.guestMiB)
-            && (320...4096).contains(snapshot.xres) && (320...4096).contains(snapshot.yres)
-            && (1...8).contains(snapshot.smp ?? 1)
-            && (snapshot.cpu == nil || ["max", "cortex-a53", "cortex-a57", "cortex-a72", "cortex-a76"].contains(snapshot.cpu!))
     }
 
     func url(for file: String) -> URL {

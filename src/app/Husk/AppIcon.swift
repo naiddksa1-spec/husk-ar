@@ -16,10 +16,7 @@ final class IconCache: @unchecked Sendable {
     private let cache = NSCache<NSString, UIImage>()
     private let queue = DispatchQueue(label: "husk.icons", qos: .userInitiated, attributes: .concurrent)
 
-    private init() {
-        cache.countLimit = 200
-        cache.totalCostLimit = 32 << 20
-    }
+    private init() { cache.countLimit = 400 }
 
     /// When the file last changed: part of the key, so an icon drawn again replaces the old one.
     static func stamp(_ path: String?) -> TimeInterval {
@@ -41,7 +38,7 @@ final class IconCache: @unchecked Sendable {
         return await withCheckedContinuation { done in
             queue.async {
                 let image = Self.decode(path, pixels: pixels)
-                if let image { self.cache.setObject(image, forKey: k, cost: (image.cgImage?.bytesPerRow ?? 0) * (image.cgImage?.height ?? 0)) }
+                if let image { self.cache.setObject(image, forKey: k) }
                 done.resume(returning: image)
             }
         }

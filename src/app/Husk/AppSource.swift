@@ -100,8 +100,8 @@ final class SourceManager: ObservableObject {
 
     // Fetch a single source by URL
     func fetchSource(urlString: String) async {
-        guard let url = URL(string: urlString), url.scheme?.lowercased() == "https", url.host != nil, url.user == nil, url.password == nil else {
-            fetchErrors[urlString] = "Use a valid HTTPS source URL without credentials."
+        guard let url = URL(string: urlString) else {
+            fetchErrors[urlString] = "Invalid URL"
             return
         }
 
@@ -111,10 +111,7 @@ final class SourceManager: ObservableObject {
         defer { loadingSources.remove(urlString) }
 
         do {
-            let (data, response) = try await session.data(from: url)
-            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode), http.url?.scheme == "https", data.count <= 32 << 20 else {
-                throw URLError(.badServerResponse)
-            }
+            let (data, _) = try await session.data(from: url)
 
             // Try F-Droid v1 format
             if let fdroid = try? JSONDecoder().decode(FDroidIndex.self, from: data) {
@@ -167,9 +164,6 @@ final class SourceManager: ObservableObject {
     }
 
     private func upsert(source: AppSource) {
-        let source = AppSource(name: source.name, identifier: source.identifier, apps: source.apps.filter {
-            $0.bundleIdentifier.range(of: "^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+$", options: .regularExpression) != nil
-        })
         if let idx = sources.firstIndex(where: { $0.identifier == source.identifier }) {
             sources[idx] = source
         } else {
@@ -180,42 +174,30 @@ final class SourceManager: ObservableObject {
     // MARK: - APK Download + Install
 
     func downloadAndInstall(app: SourceApp) {
-        guard downloadProgress[app.bundleIdentifier] == nil else { return }
-        guard let url = URL(string: app.downloadURL), url.scheme?.lowercased() == "https",
-              url.host != nil, url.user == nil, url.password == nil else {
-            fetchErrors[app.bundleIdentifier] = "The app download must use HTTPS."
-            return
-        }
-        downloadProgress[app.bundleIdentifier] = 0
-        fetchErrors.removeValue(forKey: app.bundleIdentifier)
-        Task {
-            defer { downloadProgress.removeValue(forKey: app.bundleIdentifier) }
-            do {
-                // Await the download so its temporary file is still alive when moved.
-                let (localURL, response) = try await session.download(from: url)
-                defer { try? FileManager.default.removeItem(at: localURL) }
-                guard let http = response as? HTTPURLResponse,
-                      (200...299).contains(http.statusCode), http.url?.scheme == "https" else {
-                    throw URLError(.badServerResponse)
-                }
-                let handle = try FileHandle(forReadingFrom: localURL)
-                let signature = try handle.read(upToCount: 4)
-                try handle.close()
-                guard signature == Data([0x50, 0x4b, 0x03, 0x04]) else {
-                    throw URLError(.cannotDecodeContentData)
+        guard let url = URL(string: app.downloadURL) else { return }
+        downloadProgress[app.bundleIdentifier] = 0.01
+        HuskLog.log("sources", "Downloading \(app.name)")
+
+        let task = URLSession.shared.downloadTask(with: url) { localURL, _, error in
+            Task { @MainActor in
+                self.downloadProgress.removeValue(forKey: app.bundleIdentifier)
+                guard let localURL, error == nil else {
+                    HuskLog.log("sources", "Download failed: \(String(describing: error))")
+                    return
                 }
                 let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                let downloadDir = docs.appendingPathComponent("Downloaded_APKs", isDirectory: true)
-                try FileManager.default.createDirectory(at: downloadDir, withIntermediateDirectories: true)
-                // Catalog metadata is untrusted; never turn it into a filesystem path.
-                let dest = downloadDir.appendingPathComponent(UUID().uuidString + ".apk")
-                try FileManager.default.moveItem(at: localURL, to: dest)
-                downloadProgress[app.bundleIdentifier] = 1
-                AndroidHost.shared.install([dest])
-            } catch {
-                fetchErrors[app.bundleIdentifier] = error.localizedDescription
-                HuskLog.log("sources", "Download failed: \(error.localizedDescription)")
+                let downloadDir = docs.appendingPathComponent("Downloaded_APKs")
+                try? FileManager.default.createDirectory(at: downloadDir, withIntermediateDirectories: true, attributes: nil)
+                let dest = downloadDir.appendingPathComponent("\(app.bundleIdentifier)-\(app.version).apk")
+                try? FileManager.default.removeItem(at: dest)
+                if (try? FileManager.default.moveItem(at: localURL, to: dest)) != nil {
+                    AndroidHost.shared.install([dest])
+                }
             }
         }
+        task.progress.observe(\.fractionCompleted) { progress, _ in
+            Task { @MainActor in self.downloadProgress[app.bundleIdentifier] = progress.fractionCompleted }
+        }
+        task.resume()
     }
 }
