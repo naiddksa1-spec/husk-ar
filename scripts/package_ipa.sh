@@ -51,9 +51,11 @@ fi
 # and nothing was regenerating it. A new file was therefore silently absent from
 # the target, and the only symptom was "cannot find X in scope" for a type that
 # is plainly right there on disk.
-if command -v xcodegen >/dev/null 2>&1; then
+if [ -f "$HUSK_ROOT/src/app/project.yml" ] && command -v xcodegen >/dev/null 2>&1; then
     echo "==> regenerating the project from project.yml"
     (cd "$HUSK_ROOT/src/app" && xcodegen generate --quiet)
+elif [ ! -f "$HUSK_ROOT/src/app/project.yml" ]; then
+    echo "==> no project.yml; using the checked-in Xcode project as-is" >&2
 else
     echo "==> xcodegen not installed; using the checked-in project as-is" >&2
 fi
