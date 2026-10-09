@@ -135,6 +135,18 @@
 		FB6777B7C3F72DF377987A11 /* husk-tl-godot.c in Sources */ = {isa = PBXBuildFile; fileRef = 182A386166343D705B52A7BF /* husk-tl-godot.c */; };
 		FC2A6DCF8BB4C5E874D4F4D3 /* HuskGamepad.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE13DC571D193621CD6149EA /* HuskGamepad.swift */; };
 		FC8F2E79EF7CDBC99D95F4F6 /* husk-tl-jni-input.c in Sources */ = {isa = PBXBuildFile; fileRef = 28152D0874B73915225FE8EA /* husk-tl-jni-input.c */; };
+		2A70738EC7BE5ABEA7509E8B /* husk-tl-blit.c in Sources */ = {isa = PBXBuildFile; fileRef = CB3F6E9B90C81C37AAABE363 /* husk-tl-blit.c */; };
+		395C2F3AADC9F0FDE2188950 /* husk-tl-dex.c in Sources */ = {isa = PBXBuildFile; fileRef = 7FE5D3DD79B5BEA14506FF60 /* husk-tl-dex.c */; };
+		9883B80CE2F3C84E5D6E0A8F /* husk-tl-elf.c in Sources */ = {isa = PBXBuildFile; fileRef = D08FCD7F480D6E2F65F26636 /* husk-tl-elf.c */; };
+		80F03D2EAABE3BFEA4A2785B /* husk-tl-framework.c in Sources */ = {isa = PBXBuildFile; fileRef = D50A30F186B58956276C9B24 /* husk-tl-framework.c */; };
+		0FA2BBF68B30B5630789922B /* husk-tl-json.c in Sources */ = {isa = PBXBuildFile; fileRef = 242DD6EEB7DA97455CD76826 /* husk-tl-json.c */; };
+		2472A0B862A3BC5106DBAEBC /* husk-tl-load.c in Sources */ = {isa = PBXBuildFile; fileRef = 5BE31DC5ACA28C0133F828FA /* husk-tl-load.c */; };
+		FCC98727BBE825F227BA85DC /* husk-tl-prefs.c in Sources */ = {isa = PBXBuildFile; fileRef = 86A6E743652A606829BC044B /* husk-tl-prefs.c */; };
+		622DA3EB6E956A9ED06CF55C /* husk-tl-probe.c in Sources */ = {isa = PBXBuildFile; fileRef = E4D1C81CB49D39A7D865A0DA /* husk-tl-probe.c */; };
+		308AC941024A28652B15B3F4 /* husk-tl-res.c in Sources */ = {isa = PBXBuildFile; fileRef = 7FD8DC66414547110F0E0B0E /* husk-tl-res.c */; };
+		057DC4AF3D4EBA982E4C3FF8 /* husk-tl-scan.c in Sources */ = {isa = PBXBuildFile; fileRef = 4385A14B11CBA1C3502D433D /* husk-tl-scan.c */; };
+		BC3BB676A454632D3686E110 /* husk-tl-shim.c in Sources */ = {isa = PBXBuildFile; fileRef = 08B65F9A6BAA4E2376A0CBD8 /* husk-tl-shim.c */; };
+		C561B0A164BC213A2A56D9C9 /* husk-tl-zip.c in Sources */ = {isa = PBXBuildFile; fileRef = 9E133BDBB6CB711003066815 /* husk-tl-zip.c */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -913,7 +925,19 @@
 				70AAC964808B173B7E8E395B /* husk-tl-va.c in Sources */,
 				3FFF24EF3C18B086F2D0B97C /* husk-tl-vulkan.m in Sources */,
 				8586F8338A93D7526FAEAD97 /* husk-tl-xmem.c in Sources */,
-			);
+				2A70738EC7BE5ABEA7509E8B /* husk-tl-blit.c in Sources */,
+				395C2F3AADC9F0FDE2188950 /* husk-tl-dex.c in Sources */,
+				9883B80CE2F3C84E5D6E0A8F /* husk-tl-elf.c in Sources */,
+				80F03D2EAABE3BFEA4A2785B /* husk-tl-framework.c in Sources */,
+				0FA2BBF68B30B5630789922B /* husk-tl-json.c in Sources */,
+				2472A0B862A3BC5106DBAEBC /* husk-tl-load.c in Sources */,
+				FCC98727BBE825F227BA85DC /* husk-tl-prefs.c in Sources */,
+				622DA3EB6E956A9ED06CF55C /* husk-tl-probe.c in Sources */,
+				308AC941024A28652B15B3F4 /* husk-tl-res.c in Sources */,
+				057DC4AF3D4EBA982E4C3FF8 /* husk-tl-scan.c in Sources */,
+				BC3BB676A454632D3686E110 /* husk-tl-shim.c in Sources */,
+				C561B0A164BC213A2A56D9C9 /* husk-tl-zip.c in Sources */,
+);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
