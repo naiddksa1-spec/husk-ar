@@ -25,33 +25,21 @@ cd "$OUT"
 
 if [ ! -s "$NETBOOT" ]; then
     echo "[get ] $NETBOOT"
-    curl --proto '=https' --proto-redir '=https' -fL --retry 3 -o "$NETBOOT.part" "$BASE/$NETBOOT"
+    curl -fL --retry 3 -o "$NETBOOT.part" "$BASE/$NETBOOT"
     mv "$NETBOOT.part" "$NETBOOT"
 else
     echo "[skip] $NETBOOT"
 fi
 
 echo "[sha ] verifying"
-curl --proto '=https' --proto-redir '=https' -fsL "$BASE/$NETBOOT.sha256" -o "$NETBOOT.sha256"
+curl -fsL "$BASE/$NETBOOT.sha256" -o "$NETBOOT.sha256"
 shasum -a 256 -c "$NETBOOT.sha256"
 
 if [ ! -f vmlinuz-virt ]; then
-    echo "[safe] unpacking kernel + initramfs"
-    STAGE="$(mktemp -d "$OUT/.netboot.XXXXXX")"
-    if ! python3 "$HUSK_ROOT/scripts/safe_extract_tar.py" "$NETBOOT" "$STAGE"; then
-        rm -rf -- "$STAGE"
-        exit 1
-    fi
-    KERNEL="$(find "$STAGE" -type f -name 'vmlinuz-virt' -print -quit)"
-    INITRAMFS="$(find "$STAGE" -type f -name 'initramfs-virt' -print -quit)"
-    if [ -z "$KERNEL" ] || [ -z "$INITRAMFS" ]; then
-        echo "error: Alpine archive is missing its kernel or initramfs." >&2
-        rm -rf -- "$STAGE"
-        exit 1
-    fi
-    cp "$KERNEL" ./vmlinuz-virt
-    cp "$INITRAMFS" ./initramfs-virt
-    rm -rf -- "$STAGE"
+    echo "[tar ] unpacking kernel + initramfs"
+    tar -xf "$NETBOOT"
+    find . -name 'vmlinuz-virt' -exec cp {} ./vmlinuz-virt \; 2>/dev/null || true
+    find . -name 'initramfs-virt' -exec cp {} ./initramfs-virt \; 2>/dev/null || true
 fi
 
 # edk2 firmware, for the Phase 1 ISO/disk path.

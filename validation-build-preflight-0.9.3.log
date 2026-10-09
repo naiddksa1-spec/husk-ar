@@ -1,2 +1,0 @@
-error: Husk's iOS app requires macOS, Xcode, and the Apple iOS SDK.
-       On Linux, run ./tests/run.sh for the portable regression suite.

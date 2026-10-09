@@ -31,12 +31,12 @@ shown as the two sides of its Library:
 
 <table>
   <tr>
-    <td align="center"><img src="Screenshots/gta-san-andreas.jpeg" alt="GTA San Andreas: CJ riding a BMX through Ganton" width="100%"><br><sub><b>GTA: San Andreas</b> — riding through Ganton</sub></td>
-    <td align="center"><img src="Screenshots/minecraft-dungeons.jpeg" alt="Minecraft Dungeons: the opening cutscene over a burning castle bridge" width="100%"><br><sub><b>Minecraft Dungeons</b> — the opening cutscene</sub></td>
+    <td align="center"><img src="Screenshots/gta-san-andreas.jpeg" alt="GTA: San Andreas" width="100%"><br><sub><b>GTA: San Andreas</b></sub></td>
+    <td align="center"><img src="Screenshots/minecraft-dungeons.jpeg" alt="Minecraft Dungeons" width="100%"><br><sub><b>Minecraft Dungeons</b></sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="Screenshots/beach-buggy-racing-2.jpeg" alt="Beach Buggy Racing 2: leading a race in first place" width="100%"><br><sub><b>Beach Buggy Racing 2</b> — leading a race</sub></td>
-    <td align="center"><img src="Screenshots/geometry-dash.jpeg" alt="Geometry Dash: flying the ship through a lava level" width="100%"><br><sub><b>Geometry Dash</b> — ship section of a level</sub></td>
+    <td align="center"><img src="Screenshots/beach-buggy-racing-2.jpeg" alt="Beach Buggy Racing 2" width="100%"><br><sub><b>Beach Buggy Racing 2</b></sub></td>
+    <td align="center"><img src="Screenshots/geometry-dash.jpeg" alt="Geometry Dash" width="100%"><br><sub><b>Geometry Dash</b></sub></td>
   </tr>
 </table>
 
@@ -44,9 +44,9 @@ shown as the two sides of its Library:
 
 <table>
   <tr>
-    <td align="center" width="33%"><img src="Screenshots/library.png" alt="The Library tab on the Translation Layer side, with a grid of games" width="100%"><br><sub><b>Library</b> — Translation Layer and Emulation, a swipe apart</sub></td>
-    <td align="center" width="33%"><img src="Screenshots/game-settings.png" alt="Per-game settings for GTA: SA" width="100%"><br><sub><b>Per-game settings</b> — orientation, resolution, a clean screenshot mode and the on-screen controller</sub></td>
-    <td align="center" width="33%"><img src="Screenshots/settings.png" alt="The Settings tab" width="100%"><br><sub><b>Settings</b> — JIT, Discover, performance and appearance</sub></td>
+    <td align="center" width="33%"><img src="Screenshots/library.png" alt="Library" width="100%"><br><sub><b>Library</b></sub></td>
+    <td align="center" width="33%"><img src="Screenshots/game-settings.png" alt="Game Settings" width="100%"><br><sub><b>Game Settings</b></sub></td>
+    <td align="center" width="33%"><img src="Screenshots/settings.png" alt="Settings" width="100%"><br><sub><b>Settings</b></sub></td>
   </tr>
 </table>
 
@@ -57,25 +57,47 @@ Games made with an engine Husk has a driver for:
 - Unity
 - Unreal Engine 4 (through Vulkan)
 - cocos2d-x
+- Godot 3 and 4 (GLES2, GLES3 and the Compatibility renderer)
 - SDL2 and SDL3, including LÖVE games
 - GameActivity (Minecraft) and NativeActivity
 - Rockstar's own engine (GTA: San Andreas)
 
+Games see Google Play services as installed and signed out, so the ones that
+check for it start normally; Play Games sign-in, cloud saves and purchases are
+not available. Geometry Dash can load [Geode](https://geode-sdk.org) mods.
+
 An APK needs 64-bit (`arm64-v8a`) native code. iPhones cannot run 32-bit ARM
 code, so an APK that only has 32-bit libraries cannot run here. APKs and
-split bundles (`.xapk`, `.apkm`, `.apks`) can both be added. Apps written only
+split bundles (`.xapk`, `.apkm`, `.apks`, or a Play download's separate split
+APKs and asset packs) can all be added. Apps written only
 in Java, with no native engine, are not supported on the translation layer;
 Emulation is the way to run those.
 
-One game runs per launch of Husk: to switch to another game, close Husk
-completely and open it again.
+One game runs per launch of Husk. To switch, press **Close Husk to Play** on
+the other game's page; when you open Husk again, that game starts by itself.
+
+A game's saves can be backed up to a `.zip` from its page and restored later,
+on the same iPhone or another. If a game crashes Husk, the next launch shows
+what happened, with a report you can share.
 
 ## Installing
 
-Download `Husk.ipa` from [Releases](https://github.com/leviidev/husk/releases)
-and install it with SideStore, AltStore or TrollStore. It is one IPA for all
-of them: it carries Husk's entitlements, which TrollStore keeps, and a
-sideloader re-signs it with your own. Husk needs iOS 16.4 or later.
+**SideStore, AltStore and other sideloaders:** add Husk's source, and the
+sideloader installs Husk and offers each update as it comes out.
+
+```
+https://raw.githubusercontent.com/Leviidev/Husk/main/altsource.json
+```
+
+In SideStore or AltStore: Sources › + › paste the address above.
+
+**Or by hand:** download `Husk.ipa` from
+[Releases](https://github.com/leviidev/husk/releases) and install it with
+SideStore, AltStore or TrollStore. It is one IPA for all of them: it carries
+Husk's entitlements, which TrollStore keeps, and a sideloader re-signs it with
+your own.
+
+Husk needs iOS 16.0 or later.
 
 ## JIT
 
@@ -92,29 +114,9 @@ debugger. Husk can get it in several ways, and walks you through each one
 
 ## Building
 
-### Portable checks
-
-The iOS application itself cannot be built on Linux. The offline test suite
-does run on Linux or macOS and checks archive limits, guest-agent input
-validation, repository download/error paths, guest-image checksum guards,
-asset catalogs, shell/Python syntax, and the translation-layer host tests:
-
-```sh
-./tests/run.sh
-```
-
-### Build the iOS app
-
-Husk is built on a Mac with a full Xcode installation and the iPhoneOS SDK.
-The build also needs `xcodegen`, `meson`, `ninja`, `pkg-config`, `python3`,
-`git`, `make`, `curl`, `bunzip2`, `qemu-img`, `patch`, and Rust (`cargo`,
-`rustc`, `rustup`) with the `aarch64-apple-ios` target installed. Run the
-preflight independently to check these prerequisites without downloading
-dependencies or changing build outputs:
-
-```sh
-./scripts/preflight.sh
-```
+Husk is built on a Mac with Xcode. The build scripts also call `meson`,
+`ninja`, `pkg-config`, `python3`, `xcodegen`, `qemu-img` and a Rust
+toolchain with the `aarch64-apple-ios` target.
 
 ```sh
 ./scripts/ci_build.sh
@@ -131,6 +133,10 @@ It then builds the app and writes the IPA to `build/Husk.ipa`. The first run
 takes a couple of hours, and later runs reuse what is already built. After
 that, `./scripts/package_ipa.sh` rebuilds just the app and writes
 `~/Desktop/Husk.ipa`.
+
+`tools/regress/run.sh` plays a set of games on the Mac through the
+translation layer and checks each against a reference screenshot (see the
+top of `tools/regress/cases.txt` for what it needs).
 
 ## Licence
 

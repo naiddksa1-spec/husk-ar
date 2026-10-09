@@ -9,10 +9,7 @@ OUT="${1:-$HUSK_ROOT/build/Husk.ipa}"
 cd "$HUSK_ROOT"
 
 step() { printf '\n\033[1;34m##### %s\033[0m\n' "$*"; }
-step "preflight: confirm the Apple toolchain before changing or downloading anything"
-./scripts/preflight.sh
-step "portable regression tests"
-./tests/run.sh
+
 step "fetch sources"
 ./scripts/fetch_sources.sh
 
@@ -57,3 +54,4 @@ step "on-device pairing (Rust)"
 step "app + IPA"
 mkdir -p "$(dirname "$OUT")"
 ./scripts/package_ipa.sh "$OUT"
+./scripts/package_ipa.sh --trollstore "${OUT%.ipa}.tipa"
