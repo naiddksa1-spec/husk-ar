@@ -1,0 +1,75 @@
+--- a/src/ios-jit/husk-ios-jit.c
++++ b/src/ios-jit/husk-ios-jit.c
+@@ -139,46 +139,68 @@
+ /* ------------------------------------------------------- unserviced-trap guard */
+ /*
+  * Set for exactly the duration of the BreakGetJITMapping call. If StikDebug is
+  * not there to service the brk, the trap is a real SIGTRAP that would otherwise
+  * kill the process outright -- there is no "call returned an error" to recover
+  * from. The handler below turns that into a NULL return, which the allocation
+  * path already handles.
++ *
++ * P0 hardening:
++ * - Install is idempotent (safe to call more than once from Swift).
++ * - SA_NODEFER so a nested trap cannot deadlock the handler.
++ * - Re-raise uses the previous handler properly; if none, restore SIG_DFL.
+  */
+ static _Thread_local bool g_expecting_jit_trap;
+ 
+ static struct sigaction g_prev_sigtrap;
+ static struct sigaction g_prev_sigbus;
++static bool g_trap_handler_installed;
+ 
+ static void husk_trap_handler(int sig, siginfo_t *info, void *ctx)
+ {
+     (void)info;
+     if (g_expecting_jit_trap && ctx != NULL) {
+         ucontext_t *uc = (ucontext_t *)ctx;
+         /* Step over the brk and report failure in x0, exactly as the
+          * StikDebug-serviced path would have written a result there. */
+         uc->uc_mcontext->__ss.__pc += 4;
+         uc->uc_mcontext->__ss.__x[0] = 0;
+         return;
+     }
+ 
+     /* Not ours: restore and re-raise so a genuine breakpoint or bus error is
+      * not silently swallowed. */
+     struct sigaction *prev = (sig == SIGTRAP) ? &g_prev_sigtrap : &g_prev_sigbus;
+-    sigaction(sig, prev, NULL);
++    if (prev->sa_handler == SIG_IGN || prev->sa_handler == SIG_DFL) {
++        signal(sig, prev->sa_handler == SIG_IGN ? SIG_IGN : SIG_DFL);
++    } else {
++        sigaction(sig, prev, NULL);
++    }
+     raise(sig);
+ }
+ 
+ void husk_ios_jit_install_trap_handler(void)
+ {
++    if (g_trap_handler_installed) {
++        HUSK_LOG("trap guard already installed");
++        return;
++    }
++
+     struct sigaction sa;
+     memset(&sa, 0, sizeof(sa));
+-    sa.sa_flags = SA_SIGINFO;
++    /* SA_NODEFER: do not block the signal while the handler runs, so a second
++     * unexpected trap still reaches us instead of deadlocking. */
++    sa.sa_flags = SA_SIGINFO | SA_NODEFER;
+     sa.sa_sigaction = husk_trap_handler;
+     sigemptyset(&sa.sa_mask);
+ 
+     if (sigaction(SIGTRAP, &sa, &g_prev_sigtrap) != 0) {
+         HUSK_LOG("sigaction(SIGTRAP) failed: %s", strerror(errno));
++        return;
+     }
+     if (sigaction(SIGBUS, &sa, &g_prev_sigbus) != 0) {
+         HUSK_LOG("sigaction(SIGBUS) failed: %s", strerror(errno));
++        /* Leave SIGTRAP installed; better partial protection than none. */
++        g_trap_handler_installed = true;
++        return;
+     }
++    g_trap_handler_installed = true;
+     HUSK_LOG("trap guard installed (SIGTRAP, SIGBUS)");
+ }

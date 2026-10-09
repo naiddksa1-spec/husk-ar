@@ -1,0 +1,3 @@
+/* Keep official app name in Latin script */
+"CFBundleDisplayName" = "Husk";
+"CFBundleName" = "Husk";

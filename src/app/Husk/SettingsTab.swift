@@ -9,7 +9,6 @@ struct SettingsTab: View {
             List {
                 Section {
                     NavigationLink { AboutSettings() } label: { appCard }
-                        .listRowBackground(Theme.surface)
                 }
 
                 Section {
@@ -34,9 +33,6 @@ struct SettingsTab: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .scrollContentBackground(.hidden)
-            .background(Theme.backdrop)
-            .tint(Theme.accent)
             .navigationTitle("Settings")
         }
     }
@@ -45,14 +41,13 @@ struct SettingsTab: View {
         HStack(spacing: 14) {
             HuskMark(size: 56)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Husk").font(.title3.weight(.bold)).foregroundStyle(.white)
+                Text("Husk").font(.title3.weight(.semibold))
                 Text("Version \(Bundle.main.version) · \(Bundle.main.commit)")
                     .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.82))
+                    .foregroundStyle(.secondary)
             }
         }
-        .padding(14)
-        .background(Theme.brandGradient, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .padding(.vertical, 6)
     }
 
     private func row<D: View>(_ destination: D, _ icon: String, _ tint: Color,
@@ -402,7 +397,9 @@ struct JITSettings: View {
     @ObservedObject private var runner = QemuRunner.shared
     @ObservedObject private var jit = JITCoordinator.shared
     @State private var autoStart = Onboarding.autoStart
+    @AppStorage(JITCoordinator.autoEnableKey) private var autoJIT = false
     @State private var keepAttached = JITBootstrap.keepDebuggerAttached
+    @State private var jitMiB: Int = UserDefaults.standard.integer(forKey: "husk.jitMiB")
 
     private var pairingLabel: String {
         switch jit.pairingSource {
@@ -432,7 +429,7 @@ struct JITSettings: View {
                           value: JITBootstrap.isInstalledWithTrollStore ? "yes" : "no", mono: false)
                 DetailRow(label: "Jailbreak",
                           value: JITBootstrap.debuggedAtLaunch ? "JIT allowed for apps"
-                               : JITBootstrap.isJailbroken ? "found; Allow JIT in Apps is off" : "not found", mono: false)
+                               : JITBootstrap.isJailbroken ? "found" : "not found", mono: false)
                 DetailRow(label: "Built-in pairing", value: pairingLabel, mono: false)
                 Button {
                     jit.showSetup = true
@@ -459,8 +456,14 @@ struct JITSettings: View {
                 // when someone reports "JIT does not work" these two rows are
                 // the whole diagnosis.
                 DetailRow(label: "Trap servicer",
-                          value: JITBootstrap.prewarmed ? "answering" : "not answering",
+                          value: husk_ios_jit_self_route() != nil ? "not needed"
+                               : JITBootstrap.prewarmed ? "answering" : "not answering",
                           mono: false)
+                if let route = husk_ios_jit_self_route() {
+                    DetailRow(label: "Made by Husk",
+                              value: String(cString: route) == "MAP_JIT" ? "MAP_JIT (TrollStore entitlement)" : "plain memory (debugged or jailbroken)",
+                              mono: false)
+                }
                 // Cached answer only: running the probe from a view body
                 // could freeze the app (see JITBootstrap.mapJITWorks).
                 DetailRow(label: "MAP_JIT",
@@ -474,7 +477,7 @@ struct JITSettings: View {
                 if let why = JITBootstrap.lastFailure {
                     Text(why).font(.caption).foregroundStyle(.orange)
                 }
-                if !JITBootstrap.isDebuggerAttached {
+                if !JITBootstrap.ready {
                     Button {
                         jit.enable()
                     } label: {
@@ -496,6 +499,47 @@ struct JITSettings: View {
                    + "which the kernel allows any debugged process. Either one is "
                    + "enough — which is available depends on the device and the iOS "
                    + "version, so Husk tests both rather than assuming.")
+            }
+
+            Section {
+                // Deep: user-visible control over the prewarmed JIT region size.
+                // Matches UserDefaults key husk.jitMiB read by JITBootstrap.jitBytes.
+                Picker("JIT Region Size", selection: $jitMiB) {
+                    Text("Auto").tag(0)
+                    Text("128 MiB").tag(128)
+                    Text("256 MiB").tag(256)
+                    Text("512 MiB").tag(512)
+                    Text("768 MiB").tag(768)
+                }
+                .onChange(of: jitMiB) { v in
+                    if v == 0 {
+                        UserDefaults.standard.removeObject(forKey: "husk.jitMiB")
+                    } else {
+                        UserDefaults.standard.set(v, forKey: "husk.jitMiB")
+                    }
+                }
+                DetailRow(label: "Effective now",
+                          value: "\(JITBootstrap.jitBytes / (1024 * 1024)) MiB",
+                          mono: false)
+                DetailRow(label: "Performance",
+                          value: HuskPerformance.summaryLine,
+                          mono: false)
+            } header: {
+                Text("Memory")
+            } footer: {
+                Text("Auto picks 128, 256 or 512 MiB from free memory. Lower values "
+                   + "help older devices; 512 MiB is needed for large native games "
+                   + "like Minecraft. Changing size takes effect on the next JIT claim.")
+            }
+
+            Section {
+                Toggle("Turn On JIT at Launch", isOn: $autoJIT)
+                    .disabled(!HuskBuiltInJIT.isAvailable)
+            } footer: {
+                Text(HuskBuiltInJIT.isAvailable
+                     ? "Each time Husk opens without JIT, it asks the built-in StikJIT to turn it on, so games are ready "
+                       + "without a tap. Needs StikJIT set up once (paired) first."
+                     : "Needs the built-in StikJIT, which is available on iOS 26 and later.")
             }
 
             Section {
@@ -542,6 +586,7 @@ struct SavedMachineSettings: View {
         UserDefaults.standard.object(forKey: "husk.downloadSnapshot") as? Bool ?? true
     @State private var askWhichToDelete = false
     @State private var deleteResult: String?
+    @AppStorage(GuestImage.askUpdatesKey) private var askUpdates = true
 
     var body: some View {
         Form {
@@ -590,6 +635,13 @@ struct SavedMachineSettings: View {
                 Text("Adds about 2 GB to the first download. It was captured on the "
                    + "software renderer, so it is not used on GPU — which cold-boots "
                    + "once and then saves its own.")
+            }
+
+            Section {
+                Toggle("Ask about Android updates", isOn: $askUpdates)
+            } footer: {
+                Text("When a new Android image or snapshot is published, Husk asks once whether to download it. "
+                   + "Never asked before Android has been downloaded.")
             }
         }
         .huskForm()

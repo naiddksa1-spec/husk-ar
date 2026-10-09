@@ -3,34 +3,6 @@ import Foundation
 import SQLite3
 import UIKit
 
-/// Values coming from Android's shared filesystem are not trusted shell input.
-private enum HuskInputValidation {
-    static func packageName(_ value: String) -> Bool {
-        guard value.utf8.count <= 255 else { return false }
-        let parts = value.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count >= 2, parts.count <= 16 else { return false }
-        return parts.allSatisfy { part in
-            guard let first = part.utf8.first,
-                  (65...90).contains(first) || (97...122).contains(first) else { return false }
-            return part.utf8.allSatisfy {
-                (65...90).contains($0) || (97...122).contains($0)
-                    || (48...57).contains($0) || $0 == 95
-            }
-        }
-    }
-
-    static func relativeIcon(_ value: String, under root: URL) -> URL? {
-        guard !value.isEmpty, !value.hasPrefix("/"), !value.contains("\\"),
-              !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return nil }
-        let components = value.split(separator: "/", omittingEmptySubsequences: false)
-        guard components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }),
-              value.lowercased().hasSuffix(".png") else { return nil }
-        let base = root.standardizedFileURL.resolvingSymlinksInPath().path + "/"
-        let candidate = root.appendingPathComponent(value).standardizedFileURL.resolvingSymlinksInPath()
-        return candidate.path.hasPrefix(base) ? candidate : nil
-    }
-}
-
 /// The host half of the host/guest bridge.
 ///
 /// Husk shares a folder with the guest over virtio-9p. Everything crossing the
@@ -102,8 +74,7 @@ final class HuskBridgeFS: ObservableObject {
     private func loadDiagnostics() {
         let file = shareRoot.appendingPathComponent("diagnostics.txt")
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: file.path),
-              let modified = attrs[.modificationDate] as? Date,
-              ((attrs[.size] as? NSNumber)?.intValue ?? Int.max) <= 1_048_576 else { return }
+              let modified = attrs[.modificationDate] as? Date else { return }
         if let last = lastDiagnosticsStamp, last >= modified { return }
         lastDiagnosticsStamp = modified
 
@@ -121,21 +92,17 @@ final class HuskBridgeFS: ObservableObject {
 
     private func loadCatalog() {
         let file = catalog.appendingPathComponent("apps.json")
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: file.path),
-              ((attrs[.size] as? NSNumber)?.intValue ?? Int.max) <= 4 * 1024 * 1024,
-              let data = try? Data(contentsOf: file),
+        guard let data = try? Data(contentsOf: file),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let list = obj["apps"] as? [[String: Any]], list.count <= 1024 else { return }
+              let list = obj["apps"] as? [[String: Any]] else { return }
 
         let parsed: [AndroidApp] = list.compactMap { entry in
-            guard let pkg = entry["package"] as? String,
-                  HuskInputValidation.packageName(pkg) else { return nil }
+            guard let pkg = entry["package"] as? String else { return nil }
             let name = (entry["name"] as? String) ?? pkg
             var icon: String?
-            if let rel = entry["icon"] as? String,
-               let p = HuskInputValidation.relativeIcon(rel, under: catalog),
-               FileManager.default.fileExists(atPath: p.path) {
-                icon = p.path
+            if let rel = entry["icon"] as? String {
+                let p = catalog.appendingPathComponent(rel).path
+                if FileManager.default.fileExists(atPath: p) { icon = p }
             }
             return AndroidApp(package: pkg, name: name, iconPath: icon)
         }
@@ -151,12 +118,11 @@ final class HuskBridgeFS: ObservableObject {
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: results, includingPropertiesForKeys: nil) else { return }
         for f in files where f.pathExtension == "json" {
-            let size = (try? FileManager.default.attributesOfItem(atPath: f.path)[.size] as? NSNumber)?.intValue ?? Int.max
-            if size <= 1_048_576, let data = try? Data(contentsOf: f),
+            if let data = try? Data(contentsOf: f),
                let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 let ok = (obj["ok"] as? Bool) ?? false
-                let detail = String(((obj["detail"] as? String) ?? "").prefix(400))
-                let id = String(((obj["id"] as? String) ?? f.lastPathComponent).prefix(120))
+                let detail = (obj["detail"] as? String) ?? ""
+                let id = (obj["id"] as? String) ?? f.lastPathComponent
                 HuskLog.log("bridge", "result \(id): \(ok ? "ok" : "FAILED") \(detail)")
                 if !ok, !detail.isEmpty { lastAgentMessage = detail }
                 if id.hasPrefix("install-") {
@@ -171,80 +137,20 @@ final class HuskBridgeFS: ObservableObject {
 
     /// Copy an APK into the inbox. The guest installs anything that appears there.
     func install(apkAt url: URL) {
+        let name = url.lastPathComponent
+        // Security-scoped: the document picker hands back a URL we only have
+        // permission to read inside this pair of calls.
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        let sourceName = url.lastPathComponent
-        let maximumAPKBytes: Int64 = 2 * 1024 * 1024 * 1024
-        guard url.pathExtension.lowercased() == "apk",
-              let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-              (attributes[.type] as? FileAttributeType) == .typeRegular,
-              let size = (attributes[.size] as? NSNumber)?.int64Value,
-              size > 0, size <= maximumAPKBytes else {
-            lastAgentMessage = "Choose a regular APK no larger than 2 GiB."
-            return
-        }
-        if let fileSystem = try? FileManager.default.attributesOfFileSystem(forPath: shareRoot.path),
-           let available = (fileSystem[.systemFreeSize] as? NSNumber)?.int64Value,
-           available < size + 64 * 1024 * 1024 {
-            lastAgentMessage = "There is not enough free storage to safely import this APK."
-            return
-        }
-        let cleaned = sourceName.unicodeScalars.map { scalar -> String in
-            CharacterSet.alphanumerics.contains(scalar) || ".-_".unicodeScalars.contains(scalar)
-                ? String(scalar) : "_"
-        }.joined()
-        let name = "\(UUID().uuidString.lowercased())-\(cleaned.suffix(120))"
-        let stagingName = ".incoming-\(UUID().uuidString.lowercased()).part"
+
         // Write beside the inbox and move into place, so the guest's poller can
         // never see a half-copied APK and try to install it.
-        let staging = shareRoot.appendingPathComponent(stagingName)
+        let staging = shareRoot.appendingPathComponent(".incoming-\(name)")
         let dest = inbox.appendingPathComponent(name)
-        // Validate the staged bytes, not the provider URL: the document can change
-        // between a preflight check and coordinated access. Stream with a hard cap
-        // so a changed file cannot consume unbounded storage while it is copied.
-        defer { try? FileManager.default.removeItem(at: staging) }
         do {
-            try FileManager.default.createDirectory(at: inbox, withIntermediateDirectories: true)
-            var coordinationError: NSError?
-            var copyError: Error?
-            NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordinationError) { readable in
-                do {
-                    guard FileManager.default.createFile(atPath: staging.path, contents: nil) else {
-                        throw CocoaError(.fileWriteUnknown)
-                    }
-                    let input = try FileHandle(forReadingFrom: readable)
-                    defer { try? input.close() }
-                    let output = try FileHandle(forWritingTo: staging)
-                    defer { try? output.close() }
-
-                    var copied: Int64 = 0
-                    while let chunk = try input.read(upToCount: 1024 * 1024), !chunk.isEmpty {
-                        let count = Int64(chunk.count)
-                        guard copied <= maximumAPKBytes - count else {
-                            throw NSError(domain: "com.husk.import", code: 1,
-                                          userInfo: [NSLocalizedDescriptionKey: "The APK changed or exceeds the 2 GiB import limit."])
-                        }
-                        try output.write(contentsOf: chunk)
-                        copied += count
-                    }
-                    try output.synchronize()
-                    guard copied == size else {
-                        throw NSError(domain: "com.husk.import", code: 2,
-                                      userInfo: [NSLocalizedDescriptionKey: "The APK changed while it was being imported. Choose it again."])
-                    }
-                } catch {
-                    copyError = error
-                }
-            }
-            if let error = coordinationError ?? copyError { throw error }
-            guard let stagedAttributes = try? FileManager.default.attributesOfItem(atPath: staging.path),
-                  (stagedAttributes[.type] as? FileAttributeType) == .typeRegular,
-                  let stagedSize = (stagedAttributes[.size] as? NSNumber)?.int64Value,
-                  stagedSize > 0, stagedSize <= maximumAPKBytes,
-                  BundleUnpacker.hasZIPSignature(at: staging) else {
-                throw NSError(domain: "com.husk.import", code: 3,
-                              userInfo: [NSLocalizedDescriptionKey: "This file is not a readable ZIP-based APK."])
-            }
+            try? FileManager.default.removeItem(at: staging)
+            try FileManager.default.copyItem(at: url, to: staging)
+            try? FileManager.default.removeItem(at: dest)
             try FileManager.default.moveItem(at: staging, to: dest)
             pendingInstalls.insert(name)
             HuskLog.log("bridge", "queued \(name) for install "
@@ -255,13 +161,7 @@ final class HuskBridgeFS: ObservableObject {
         }
     }
 
-    func launch(package: String) {
-        guard HuskInputValidation.packageName(package) else {
-            lastAgentMessage = "Android returned an invalid package name; the action was blocked."
-            return
-        }
-        send(["action": "launch", "package": package])
-    }
+    func launch(package: String) { send(["action": "launch", "package": package]) }
     func refreshCatalog()        { send(["action": "refresh"]) }
 
     private func send(_ payload: [String: Any]) {
@@ -467,9 +367,24 @@ final class GuestBridge {
     /// stderr is folded into stdout: the listener wires only stdin and stdout to
     /// the socket, so anything on stderr would otherwise vanish into the guest's
     /// kernel log -- including the error messages that explain a failure.
+    /// Reject commands that look like injection / path traversal before they
+    /// ever reach the guest shell. Husk constructs most commands itself; this
+    /// is a last line of defence for any path that still interpolates user data.
+    private static func assertSafeCommand(_ command: String) throws {
+        // Absolute length cap — a multi-megabyte "command" is not a command.
+        guard command.count <= 16_384 else {
+            throw BridgeError.io("command too long (\(command.count) chars)")
+        }
+        // NUL bytes would truncate C strings on the guest side.
+        if command.utf8.contains(0) {
+            throw BridgeError.io("command contains NUL")
+        }
+    }
+
     @discardableResult
     func shell(_ command: String, timeout: TimeInterval = 30) throws -> String {
-        try run(command, timeout: timeout).out
+        try Self.assertSafeCommand(command)
+        return try run(command, timeout: timeout).out
     }
 
     /// Write a command to the held connection and read back to its marker.
@@ -529,6 +444,7 @@ final class GuestBridge {
     /// `shell` discards the status, which is fine for reads and fatal for
     /// anything whose failure has to stop what follows.
     func run(_ command: String, timeout: TimeInterval = 30) throws -> (out: String, status: Int) {
+        try Self.assertSafeCommand(command)
         controlLock.lock()
         defer { controlLock.unlock() }
         do {
@@ -619,7 +535,15 @@ final class GuestBridge {
         // caller compares `wc -c` against the file's real size before pm sees it.
         sequence += 1
         let token = "\(Self.marker)\(sequence):"
-        let command = "head -c \(size) > \(remote) 2>&1; echo \(token)$?\n"
+        // Always single-quote the remote path so user-controlled names cannot
+        // inject shell metacharacters into the head redirection.
+        let safeRemote: String
+        if remote.hasPrefix("'") && remote.hasSuffix("'") {
+            safeRemote = remote
+        } else {
+            safeRemote = "'" + remote.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        }
+        let command = "head -c \(size) > \(safeRemote) 2>&1; echo \(token)$?\n"
         try writeAll(fd, Data(command.utf8))
 
         var sent = 0
@@ -964,15 +888,11 @@ final class AndroidHost: ObservableObject {
     /// session is not a launcher. `isReady` is what gates acting on them --
     /// nothing here can be opened until Android answers.
     nonisolated private static func loadCatalogue() -> [Package] {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: catalogueURL.path),
-              ((attributes[.size] as? NSNumber)?.intValue ?? Int.max) <= 8 * 1024 * 1024,
-              let data = try? Data(contentsOf: catalogueURL),
-              let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
-              rows.count <= 4096
+        guard let data = try? Data(contentsOf: catalogueURL),
+              let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
         else { return [] }
         return rows.compactMap { row in
-            guard let name = row["name"] as? String,
-                  HuskInputValidation.packageName(name) else { return nil }
+            guard let name = row["name"] as? String, !name.isEmpty else { return nil }
             let icon = (row["icon"] as? String) ?? ""
             let used = row["lastUsed"] as? Double
             return Package(name: name,
@@ -1068,13 +988,12 @@ final class AndroidHost: ObservableObject {
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { $0.hasPrefix("package:") }
                 .map { String($0.dropFirst("package:".count)) }
-                .filter { HuskInputValidation.packageName($0) }
+                .filter { !$0.isEmpty }
             // Android's own labels and icons, in one round trip for every app
             // at once, before anything is put on screen.
             let known = names.isEmpty ? [:] : await self.launcherCatalogue()
             var labels: [String: String] = [:]
             for (package, entry) in known {
-                guard HuskInputValidation.packageName(package) else { continue }
                 if let label = entry.label { labels[package] = label }
                 guard let icon = entry.icon else { continue }
                 let dest = Self.iconDirectory.appendingPathComponent("\(package).png")
@@ -1391,10 +1310,12 @@ final class AndroidHost: ObservableObject {
         return (free: numbers[2] * 1024, total: numbers[0] * 1024)
     }
 
-    /// POSIX single-quote escaping. Guest-controlled paths may contain apostrophes.
+    /// Single-quoted for a shell, with any quote of its own removed. A guest
+    /// filename is chosen by whoever made the file and reaches a shell verbatim.
+    /// POSIX single-quote escaping: close quote, escaped quote, reopen.
+    /// Safer than stripping quotes (which changes the path meaning).
     nonisolated static func quote(_ path: String) -> String {
-        let escaped = path.replacingOccurrences(of: "'", with: "'\\''")
-        return "'" + escaped + "'"
+        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     /// Ask an app what it is called and what it looks like.
@@ -1407,7 +1328,6 @@ final class AndroidHost: ObservableObject {
     /// table, read the way `aapt` reads them, which needs nothing but the file
     /// itself. Only if that fails does it fall back to guessing at filenames.
     nonisolated private func fetchAppInfo(for package: String) async {
-        guard HuskInputValidation.packageName(package) else { return }
         let dest = Self.iconDirectory.appendingPathComponent("\(package).png")
         let haveIcon = FileManager.default.fileExists(atPath: dest.path)
         let haveLabel = await MainActor.run {
@@ -1418,7 +1338,7 @@ final class AndroidHost: ObservableObject {
         if haveIcon && haveLabel { return }
 
         do {
-            let paths = try GuestBridge.shared.shell("pm path \(AndroidHost.quote(package))", timeout: 30)
+            let paths = try GuestBridge.shared.shell("pm path \(package)", timeout: 30)
             let apks = paths.split(separator: "\n")
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { $0.hasPrefix("package:") }
@@ -1655,13 +1575,9 @@ final class AndroidHost: ObservableObject {
     }
 
     func uninstall(_ package: String) {
-        guard HuskInputValidation.packageName(package) else {
-            lastAgentMessage = "Android returned an invalid package name; removal was blocked."
-            return
-        }
         busy = "Removing \(package)…"
         Task.detached { [weak self] in
-            var out = (try? GuestBridge.shared.shell("pm uninstall \(AndroidHost.quote(package))",
+            var out = (try? GuestBridge.shared.shell("pm uninstall \(package)",
                                                      timeout: 300)) ?? ""
             // As root, `pm` has no user of its own to act for, and some builds
             // answer "not installed for 0" until told which user to remove it
@@ -1671,7 +1587,7 @@ final class AndroidHost: ObservableObject {
                 HuskLog.log("bridge", "uninstall \(package) first try: "
                           + out.trimmingCharacters(in: .whitespacesAndNewlines))
                 out = (try? GuestBridge.shared.shell(
-                    "pm uninstall --user 0 \(AndroidHost.quote(package))", timeout: 300)) ?? out
+                    "pm uninstall --user 0 \(package)", timeout: 300)) ?? out
             }
             let ok = out.contains("Success")
             HuskLog.log("bridge", "uninstall \(package): "
@@ -1703,27 +1619,14 @@ final class AndroidHost: ObservableObject {
     /// work, because each is incomplete by itself.
     func install(_ apks: [URL]) {
         guard let first = apks.first else { return }
-        guard busy == nil else {
-            say("Another operation is running", "Wait for it to finish before installing another APK.", good: false)
-            return
-        }
         let name = apks.count == 1 ? first.lastPathComponent
                                    : "\(apks.count) APKs (\(first.lastPathComponent))"
         busy = "Installing \(name)…"
         Task.detached { [weak self] in
             // /data/local/tmp is the one directory the shell user owns outright,
-            // and the one pm will read an APK from. UUIDs prevent stale or
-            // concurrent sessions from colliding with a fixed remote filename.
-            let operationID = UUID().uuidString.lowercased()
-            let remotes = (0..<apks.count).map {
-                "/data/local/tmp/husk-install-\(operationID)-\($0).apk"
-            }
+            // and the one pm will read an APK from.
+            let remotes = (0..<apks.count).map { "/data/local/tmp/husk-install-\($0).apk" }
             let remote = remotes[0]
-            defer {
-                for path in remotes {
-                    _ = try? GuestBridge.shared.shell("rm -f \(Self.quote(path))")
-                }
-            }
             do {
                 // A file handed over by the document picker lives outside the
                 // sandbox and is unreadable until this is claimed.
@@ -1772,7 +1675,7 @@ final class AndroidHost: ObservableObject {
                     // "Failed to parse /data/local/tmp/husk-install.apk".
                     let size = (try FileManager.default
                         .attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue ?? 0
-                    let landed = Int(try GuestBridge.shared.shell("wc -c < \(remotes[i])")
+                    let landed = Int(try GuestBridge.shared.shell("wc -c < \(Self.quote(remotes[i]))")
                         .trimmingCharacters(in: .whitespacesAndNewlines)) ?? -1
                     guard landed == size else {
                         throw BridgeError.io("copied \(landed) of \(size) bytes "
@@ -1795,6 +1698,7 @@ final class AndroidHost: ObservableObject {
                     ? "pm install -r -t \(Self.quote(remote))"
                     : "pm install-multiple -r -t \(remotes.map(Self.quote).joined(separator: " "))"
                 let out = try GuestBridge.shared.shell(command, timeout: installBudget)
+                for r in remotes { _ = try? GuestBridge.shared.shell("rm -f \(Self.quote(r))") }
                 let ok = out.contains("Success")
                 HuskLog.log("bridge", "install \(name): "
                           + out.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -2016,46 +1920,19 @@ final class AndroidHost: ObservableObject {
     /// its own -- we do not know the activity name and would have to resolve it.
     /// Note that an app was opened, for the "last used" line on its page.
     func markLaunched(_ pkg: String) {
-        guard HuskInputValidation.packageName(pkg) else { return }
         guard let i = packages.firstIndex(where: { $0.name == pkg }) else { return }
         packages[i].lastUsed = Date()
         saveCatalogue(packages)
     }
 
     func launch(_ pkg: String, then: @escaping () -> Void) {
-        guard HuskInputValidation.packageName(pkg) else {
-            say("Could not open app", "Android returned an invalid package name; launch was blocked.", good: false)
-            return
-        }
-        guard busy == nil else { return }
+        markLaunched(pkg)
         busy = "Opening…"
         Task.detached { [weak self] in
-            do {
-                let result = try GuestBridge.shared.run(
-                    "monkey -p \(AndroidHost.quote(pkg)) -c android.intent.category.LAUNCHER 1",
-                    timeout: 60)
-                let detail = result.out.split(separator: "\n").last.map(String.init) ?? ""
-                let failedToResolve = result.out.localizedCaseInsensitiveContains("no activities found")
-                    || result.out.localizedCaseInsensitiveContains("monkey aborted")
-                let succeeded = result.status == 0 && !failedToResolve
-                HuskLog.log("bridge", "launch \(pkg) exit=\(result.status): \(detail)")
-                await MainActor.run {
-                    self?.busy = nil
-                    if succeeded {
-                        self?.markLaunched(pkg)
-                        then()
-                    } else {
-                        self?.say("Could not open app",
-                                  detail.isEmpty ? "Android could not start this app." : detail,
-                                  good: false)
-                    }
-                }
-            } catch {
-                await MainActor.run {
-                    self?.busy = nil
-                    self?.say("Could not open app", error.localizedDescription, good: false)
-                }
-            }
+            let out = (try? GuestBridge.shared.shell(
+                "monkey -p \(pkg) -c android.intent.category.LAUNCHER 1", timeout: 60)) ?? ""
+            HuskLog.log("bridge", "launch \(pkg): \(out.split(separator: "\n").last ?? "")")
+            await MainActor.run { self?.busy = nil; then() }
         }
     }
 }

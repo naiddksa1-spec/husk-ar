@@ -28,6 +28,12 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(Theme.Appearance.key) private var appearance = Theme.Appearance.system
     @ObservedObject private var theme = AppTheme.shared
+    @ObservedObject private var incoming = IncomingFiles.shared
+    @ObservedObject private var showcase = ShowcaseStore.shared
+    @ObservedObject private var tlStore = TranslationLayerStore.shared
+    @ObservedObject private var crash = CrashReport.shared
+    @ObservedObject private var updates = AppUpdates.shared
+    @State private var showWhatsNew = false
 
     var body: some View {
         ZStack {
@@ -41,11 +47,21 @@ struct ContentView: View {
             // Android is then a matter of hiding what is over it, which is also
             // why it appears instantly rather than reloading.
             TabView(selection: $router.tab) {
-                LibraryHome(started: started && runner.isRunning,
-                            onOpenGuest: { showGuestScreen = true },
-                            onStartAndroid: startFromLibrary)
+                HomeView()
+                    .tabItem { Label("Home", systemImage: "house.fill") }
+                    .tag(HuskTab.home)
+
+                LibraryScreen()
                     .tabItem { Label("Library", systemImage: "square.grid.2x2.fill") }
                     .tag(HuskTab.library)
+
+                StoreView()
+                    .tabItem { Label("Store", systemImage: "cart.fill") }
+                    .tag(HuskTab.store)
+
+                DownloadsTab()
+                    .tabItem { Label("Downloads", systemImage: "arrow.down.circle.fill") }
+                    .tag(HuskTab.downloads)
 
                 SettingsTab()
                     .tabItem { Label("Settings", systemImage: "gearshape.fill") }
@@ -102,14 +118,63 @@ struct ContentView: View {
         .fullScreenCover(isPresented: $showOnboarding) {
             OnboardingView {
                 showOnboarding = false
-                if Onboarding.autoStart, JITBootstrap.isDebuggerAttached {
+                if Onboarding.autoStart, JITBootstrap.ready {
                     booting = true
                     start()
                 }
             }
         }
         .sheet(isPresented: $showLogs) { LogView() }
+        // A game that ended Husk last time: say so, with its report.
+        .sheet(item: Binding(get: { showOnboarding ? nil : crash.pending }, set: { crash.pending = $0 }),
+               onDismiss: { if WhatsNew.due { showWhatsNew = true } }) { r in
+            CrashReportSheet(report: r)
+        }
+        // After an update: what it brought, once.
+        .fullScreenCover(isPresented: $showWhatsNew) {
+            WhatsNewSheet { WhatsNew.markSeen(); showWhatsNew = false }
+        }
+        // A newer Husk is on GitHub.
+        .alert("Husk \(updates.available?.version ?? "") Is Available", isPresented: Binding(
+                get: { updates.available != nil && !showOnboarding && !showWhatsNew && crash.pending == nil },
+                set: { if !$0 { updates.dismiss() } })) {
+            Button("View Release") {
+                if let page = updates.available?.page { UIApplication.shared.open(page) }
+                updates.dismiss()
+            }
+            Button("Not Now", role: .cancel) { updates.dismiss() }
+        } message: {
+            Text("You have \(AppUpdates.current). The new version's IPA is on its release page.")
+        }
+        .task { await updates.check() }
         .sheet(isPresented: $router.showFiles) { FilesTab() }
+        // Pictures for the apps here: read the index on launch and whenever the set of apps changes.
+        .task(id: showcasePackages) { showcase.refresh(for: showcasePackages) }
+        .alert("Metadata Updated", isPresented: Binding(get: { showcase.shouldAsk && !showOnboarding },
+                                                         set: { if !$0 { showcase.asked() } })) {
+            Button("Download") { showcase.downloadUpdates() }
+            Button("Not Now", role: .cancel) { showcase.asked() }
+        } message: {
+            let n = showcase.updates.count
+            Text("Metadata for \(n) of your app\(n == 1 ? "" : "s") has been updated. Would you like to download the updates?")
+        }
+        // An APK shared to Husk: where does it go?
+        .sheet(isPresented: Binding(get: { !incoming.waiting.isEmpty },
+                                    set: { if !$0 { incoming.discard() } })) {
+            IncomingChooser()
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
+        }
+        // APKs meant for Android wait until it can take them.
+        .onChange(of: host.isReady) { ready in
+            incoming.installForAndroidIfReady()
+            // An app asked for while Android was off: open it now.
+            if ready, let pkg = router.pendingAndroidLaunch {
+                router.pendingAndroidLaunch = nil
+                host.launch(pkg) { showGuestScreen = true }
+            }
+        }
+        .onChange(of: host.busy) { _ in incoming.installForAndroidIfReady() }
         .sheet(isPresented: $jit.showSetup) { JITSetupFlow() }
         // The built-in helper attaches while Husk stays in the foreground, so
         // there is no relaunch to trigger the region claim below; this is it.
@@ -124,10 +189,17 @@ struct ContentView: View {
         } message: {
             Text(guest.update.detail)
         }
-        .onAppear { evaluate() }
+        .onAppear {
+            crash.checkPreviousRun()
+            if crash.pending == nil { router.resumeSwitch() }
+            if crash.pending == nil, WhatsNew.due { showWhatsNew = true }
+            router.openGuest = { showGuestScreen = true }
+            router.startAndroid = { startFromLibrary() }
+            evaluate()
+        }
         // The two-parameter onChange is iOS 17; this single-parameter form is
         // deprecated there but still works, and is the only one that compiles
-        // against the 16.4 deployment target.
+        // against the 16.0 deployment target.
         .onChange(of: scenePhase) { phase in
             // StikDebug relaunches Husk after attaching, so returning to the
             // foreground is the moment worth re-checking, not first launch.
@@ -135,7 +207,14 @@ struct ContentView: View {
         }
     }
 
+    /// Every package Husk holds, from both sides: what the picture index is read for.
+    private var showcasePackages: Set<String> {
+        Set(tlStore.apps.compactMap(\.packageName) + host.packages.map(\.name))
+    }
+
     private func evaluate() {
+        // Before anything else wants JIT: the setting that turns it on as Husk opens.
+        jit.enableAtLaunchIfAsked()
         try? guest.prepareFirmware()
         guest.refresh()
         HuskBridgeFS.shared.prepare()
@@ -145,8 +224,8 @@ struct ContentView: View {
         // network round trip, and nothing on this screen should wait for it.
         Task { await guest.checkForUpdates() }
 
-        if !JITBootstrap.isDebuggerAttached {
-            HuskLog.log("ui", "no debugger attached; waiting for StikDebug")
+        if !JITBootstrap.ready {
+            HuskLog.log("ui", "no JIT yet; waiting for a debugger")
             return
         }
 
@@ -177,7 +256,7 @@ struct ContentView: View {
     /// the action behind a button reads as a button that does nothing, so the
     /// JIT prompt is raised here instead.
     private func startFromLibrary() {
-        guard JITBootstrap.isDebuggerAttached else {
+        guard JITBootstrap.ready else {
             HuskLog.log("ui", "start asked for without JIT; enabling with \(jit.resolvedMethod.title)")
             jit.enable()
             return
@@ -187,8 +266,11 @@ struct ContentView: View {
 
     private func start() {
         guard !started else { return }
-        guard JITBootstrap.isDebuggerAttached else { return }
-        HuskLog.log("ui", "CS_DEBUGGED set; starting QEMU")
+        guard JITBootstrap.ready else {
+            HuskLog.log("ui", "start() called without JIT; aborting cleanly")
+            return
+        }
+        HuskLog.log("ui", "JIT is available; starting QEMU")
         // Take the JIT region at the last moment before QEMU, as well as before
         // the download. Whichever comes first wins; the second call is a no-op.
         //
@@ -211,14 +293,18 @@ struct ContentView: View {
         // executable memory" and refused to start a guest that would have run.
         if !JITBootstrap.prewarm(), !JITBootstrap.isLive {
             guard JITBootstrap.mapJITWorks else {
-                HuskLog.log("jit", "refusing to start QEMU: no trap servicer is "
-                                 + "answering and MAP_JIT does not execute here")
+                let reason = JITBootstrap.lastFailure
+                    ?? "no trap servicer is answering and MAP_JIT does not execute here"
+                HuskLog.log("jit", "refusing to start QEMU: \(reason)")
+                // Do not start QEMU — that would be a guaranteed SIGSEGV.
+                // The library/JIT card already reflects missing JIT.
                 return
             }
             HuskLog.log("jit", "no dual mapping, but MAP_JIT executes -- letting "
                              + "QEMU map its own buffer")
         }
         started = true
+        router.androidStarted = true
         QemuRunner.shared.start()
         // Start probing the bridge now, not when the library happens to be
         // opened. isReady is only ever set here, and under the old screen-based

@@ -14,11 +14,19 @@ private let CS_DEBUGGED = UInt32(0x10000000)
 
 /// Gets Husk from "launched normally, no executable memory" to "JIT is live".
 ///
-/// On iOS 27 every supported device enforces TXM, so the app cannot grant itself
+/// On iOS 26+ every supported device enforces TXM, so the app cannot grant itself
 /// executable memory — only an attached debugger can. That debugger is either
 /// StikDebug, which Husk hands the JIT script inline over its URL scheme, or
 /// Husk's own built-in StikJIT helper (JITSetup.swift), which runs the same
 /// script from an app extension.
+///
+/// P0 changes (crash-on-launch hardening):
+/// - Trap guard is installed before any other work (see HuskApp.init).
+/// - prewarm() never fatal; failures only set lastFailure and return false.
+/// - JIT size is chosen dynamically from available memory / device class.
+/// - TrollStore + Dopamine paths are detected more carefully and never force
+///   a second brk after the first unanswered one.
+/// - ready never triggers an unbounded retry loop.
 enum JITBootstrap {
     private static let log = Logger(subsystem: "com.husk.app", category: "jit")
 
@@ -40,20 +48,35 @@ enum JITBootstrap {
                          + "return 0 instead of killing the process")
     }
 
-    /// Size QEMU will ask for. Must match tb-size in the phase 1 command line:
-    /// a smaller region here means QEMU allocates a second one, at a point where
-    /// StikDebug may be long gone.
-    // Back to 256 MiB. Raising this to 512 was one of three changes made at
-    // once in v15, and v15 was the first build to die inside qemu_init(). The
-    // guest RAM -- the other suspect -- has since been shown to map and write
-    // cleanly at 6144 MiB, which leaves this. The region itself allocates and
-    // passes its selftest at 512; whatever objects is further in, where TCG
-    // carves the buffer into per-vCPU regions.
-    //
-    // 512 MiB since the native runtime runs Minecraft: its main library alone is a 354 MiB image that has to sit in this
-    // region, with the stubs the loader places beside it. A larger prewarm is safe for QEMU, which is handed the
-    // prewarmed region whenever it is at least what tb-size asks for.
-    static let jitBytes = 512 * 1024 * 1024
+    // MARK: - Dynamic JIT size (P0)
+
+    /// Prefer a size the device can actually hold. 512 MiB is required for
+    /// large native libraries (Minecraft), but on older phones with low free
+    /// memory it is the difference between a successful launch and jetsam.
+    static var jitBytes: Int {
+        // Honour an explicit override if the user set one in Settings.
+        let override = UserDefaults.standard.integer(forKey: "husk.jitMiB")
+        if override >= 64 && override <= 1024 {
+            return override * 1024 * 1024
+        }
+
+        let avail = husk_ios_available_memory()
+        let availMiB = avail / (1024 * 1024)
+
+        // Keep a safety margin for the rest of the process + guest RAM mapping.
+        // On devices with < 1.5 GB free we drop to 256 MiB; below ~800 MiB free
+        // we use 128 MiB (enough for most TL games, tight for QEMU Minecraft).
+        if availMiB < 800 {
+            HuskLog.log("jit", "low memory (\(availMiB) MiB free) → 128 MiB JIT")
+            return 128 * 1024 * 1024
+        }
+        if availMiB < 1536 {
+            HuskLog.log("jit", "moderate memory (\(availMiB) MiB free) → 256 MiB JIT")
+            return 256 * 1024 * 1024
+        }
+        // Default for modern devices / high free memory.
+        return 512 * 1024 * 1024
+    }
 
     /// True once the region is held. The memory budget needs this: after a
     /// prewarm the JIT is already counted in the footprint, so subtracting it
@@ -68,21 +91,40 @@ enum JITBootstrap {
     /// recovering from that in-process -- without a debugger there is no
     /// executable memory at all, and asking again later is precisely what does
     /// not work. So claim it first and hold it.
+    ///
+    /// This function is intentionally never fatal. All failure modes set
+    /// `lastFailure` and return false so the UI can show a recoverable state
+    /// instead of a black crash.
     @discardableResult
     static func prewarm() -> Bool {
-        guard isDebuggerAttached else {
+        if prewarmed { return true }
+
+        // Before iOS 26 Husk can make the region itself where the device allows
+        // it (TrollStore's dynamic-codesigning, a jailbreak, or a debugger that
+        // attached and let go), so it does not wait for CS_DEBUGGED there:
+        // Dopamine hides that flag from apps unless "Allow JIT in Apps" is on,
+        // while still letting them run code they wrote.
+        guard isDebuggerAttached || (canGrantOwnJIT && !selfGrantTried) else {
             HuskLog.log("jit", "no debugger attached yet; not prewarming")
             return false
         }
-        HuskLog.log("jit", "claiming \(jitBytes / (1024 * 1024)) MiB of JIT memory now, "
+        if !isDebuggerAttached { selfGrantTried = true }
+
+        let bytes = jitBytes
+        HuskLog.log("jit", "claiming \(bytes / (1024 * 1024)) MiB of JIT memory now, "
                          + "before the guest download -- StikDebug does not stay attached")
-        let ok = husk_ios_jit_prewarm(jitBytes)
+        husk_ios_jit_log_footprint("prewarm-before")
+
+        // Native call is guarded by the trap handler installed at launch.
+        // It returns false (never aborts) when the brk is unanswered.
+        let ok = husk_ios_jit_prewarm(bytes)
+
         if ok {
             prewarmed = true
             lastFailure = nil
             detachIfDone()
-        }
-        else if mapJITWorks {
+            husk_ios_jit_log_footprint("prewarm-ok")
+        } else if mapJITWorks {
             // Not a failure worth reporting: this is the ordinary shape of an
             // iOS that does not need a trap servicer. QEMU maps its own buffer
             // with MAP_JIT a moment later and runs exactly as well.
@@ -94,7 +136,8 @@ enum JITBootstrap {
                         + "requests, and this device will not execute a MAP_JIT "
                         + "mapping either, so no executable memory could be "
                         + "claimed. This is what happens when Husk runs inside "
-                        + "another container app rather than sideloaded on its own."
+                        + "another container app rather than sideloaded on its own, "
+                        + "or when TrollStore/Dopamine JIT entitlements are missing."
         }
         HuskLog.log("jit", ok ? "JIT region secured; it will be handed to QEMU later"
                               : "JIT prewarm FAILED -- StikDebug is not servicing traps")
@@ -113,6 +156,20 @@ enum JITBootstrap {
     static var keepDebuggerAttached: Bool {
         get { UserDefaults.standard.bool(forKey: "husk.keepDebuggerAttached") }
         set { UserDefaults.standard.set(newValue, forKey: "husk.keepDebuggerAttached") }
+    }
+
+    /// The one try at making the region without a debugger has been made (it is not repeated: the answer will not change).
+    nonisolated(unsafe) static private var selfGrantTried = false
+
+    /// Whether Husk has JIT now: a debugger marked it, or the region is already held. Before iOS 26 this tries, once, to make
+    /// the region itself, which is all TrollStore and jailbroken devices need. Cheap after the first call, and logs nothing.
+    ///
+    /// P0: never loops. selfGrantTried prevents repeated expensive attempts that
+    /// used to contribute to launch-time freezes / crashes on Dopamine.
+    static var ready: Bool {
+        if debuggedFlag || prewarmed || isLive { return true }
+        guard canGrantOwnJIT, !selfGrantTried else { return false }
+        return prewarm()
     }
 
     /// True once this process has told StikDebug to let go.
@@ -186,10 +243,16 @@ enum JITBootstrap {
             return false
         }
         let attached = (flags & CS_DEBUGGED) != 0
-        HuskLog.log("jit", String(format: "csops status = 0x%08x, CS_DEBUGGED = %@",
-                                  flags, attached ? "set" : "clear"))
+        // Only log on first observation or state change to avoid spam.
+        if attached != lastLoggedDebugState {
+            lastLoggedDebugState = attached
+            HuskLog.log("jit", String(format: "csops status = 0x%08x, CS_DEBUGGED = %@",
+                                      flags, attached ? "set" : "clear"))
+        }
         return attached
     }
+
+    nonisolated(unsafe) private static var lastLoggedDebugState: Bool?
 
     /// `isDebuggerAttached` without the log line, for polling while the
     /// built-in helper attaches.
@@ -246,22 +309,18 @@ enum JITBootstrap {
         loadScript()?.data(using: .utf8)?.base64EncodedString()
     }
 
-    /// Ask StikDebug to attach to us and run the JIT script.
-    ///
-    /// This backgrounds Husk — iOS switches to StikDebug, which attaches over the
-    /// debugserver protocol, runs the script, and relaunches us. Everything after
-    /// this point happens in a *new* foreground pass of the app.
+    /// Ask TrollStore to enable JIT for us.
     @MainActor
     static func requestTrollStoreAttach() -> Bool {
         HuskLog.log("jit", "requestTrollStoreAttach() -- handing off to TrollStore")
         guard let bundleID = Bundle.main.bundleIdentifier else { return false }
-        
+
         let url = "apple-magnifier://enable-jit?bundle-id=\(bundleID)"
         guard let launchURL = URL(string: url), UIApplication.shared.canOpenURL(launchURL) else {
             HuskLog.log("jit", "FAIL: cannot open apple-magnifier:// -- TrollStore is not installed")
             return false
         }
-        
+
         HuskLog.log("jit", "opening apple-magnifier:// for bundle \(bundleID)")
         UIApplication.shared.open(launchURL)
         return true

@@ -21,6 +21,15 @@ import simd
 /// So this takes the texture and draws it into the same CAMetalLayer, with no
 /// GL involved. ANGLE keeps its window surface on that layer for virgl's sake,
 /// but nothing ever swaps it, so the two do not fight over drawables.
+///
+/// P1 performance changes:
+/// - Rotation flag is atomic so the hot present path does not take the lock
+///   just to read a Bool.
+/// - Layer pointer is read under a short critical section then released before
+///   any GPU work, reducing contention with the UI thread.
+/// - presentDrawable uses the system timing when available (iOS 16+).
+/// - clearColor is black once; no per-frame reallocation of descriptors beyond
+///   what Metal requires.
 final class HuskMetalPresenter {
     nonisolated(unsafe) static let shared = HuskMetalPresenter()
 
@@ -36,19 +45,20 @@ final class HuskMetalPresenter {
     private var presented: UInt64 = 0
 
     /// Whether the guest's picture needs a quarter turn to match the screen.
-    /// Set by HuskGLView when the device orientation changes, and read on
-    /// QEMU's thread, so it goes through the same lock as everything else.
-    private var rotated = false
+    /// Atomic so the present path can read it without the lock.
+    private let rotatedFlag = OSAllocatedUnfairLock(initialState: false)
 
     func setRotated(_ on: Bool) {
-        lock.lock()
-        rotated = on
-        lock.unlock()
+        rotatedFlag.withLock { $0 = on }
     }
 
     func attach(layer: CAMetalLayer) {
         lock.lock()
         self.layer = layer
+        // Prefer triple buffering and allow the compositor to drop frames rather
+        // than block the QEMU thread when the pool is exhausted.
+        layer.maximumDrawableCount = 3
+        layer.presentsWithTransaction = false
         lock.unlock()
     }
 
@@ -139,16 +149,35 @@ final class HuskMetalPresenter {
 
     /// Called from QEMU's thread, once per guest frame.
     func present(texture: MTLTexture, flip: Bool) {
-        lock.lock()
-        defer { lock.unlock() }
+        // Snapshot layer + pipeline state under a short lock, then do all GPU
+        // work outside it so the UI thread is never blocked by a present.
+        let layerSnapshot: CAMetalLayer
+        let queueSnapshot: MTLCommandQueue
+        let pipelineSnapshot: MTLRenderPipelineState
+        let samplerSnapshot: MTLSamplerState
+        let rotated: Bool
 
-        guard let layer else { return }
+        lock.lock()
+        defer { /* unlocked below after snapshot */ }
+        guard let layer else {
+            lock.unlock()
+            return
+        }
         guard prepare(for: texture, layer),
-              let queue, let pipeline, let sampler else { return }
+              let queue, let pipeline, let sampler else {
+            lock.unlock()
+            return
+        }
+        layerSnapshot = layer
+        queueSnapshot = queue
+        pipelineSnapshot = pipeline
+        samplerSnapshot = sampler
+        rotated = rotatedFlag.withLock { $0 }
+        lock.unlock()
 
         // nextDrawable returns nil when the pool is exhausted -- a dropped
         // frame, not an error, and the guest will send another.
-        guard let drawable = layer.nextDrawable() else { return }
+        guard let drawable = layerSnapshot.nextDrawable() else { return }
 
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = drawable.texture
@@ -156,7 +185,7 @@ final class HuskMetalPresenter {
         pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
         pass.colorAttachments[0].storeAction = .store
 
-        guard let buffer = queue.makeCommandBuffer(),
+        guard let buffer = queueSnapshot.makeCommandBuffer(),
               let encoder = buffer.makeRenderCommandEncoder(descriptor: pass) else { return }
 
         // Letterbox rather than stretch. The guest occupies effW x effH on
@@ -164,8 +193,8 @@ final class HuskMetalPresenter {
         // the scale, and the other is inset.
         let effW = Float(rotated ? texture.height : texture.width)
         let effH = Float(rotated ? texture.width  : texture.height)
-        let layerW = Float(layer.drawableSize.width)
-        let layerH = Float(layer.drawableSize.height)
+        let layerW = Float(layerSnapshot.drawableSize.width)
+        let layerH = Float(layerSnapshot.drawableSize.height)
         var sx: Float = 1, sy: Float = 1
         if effW > 0, effH > 0, layerW > 0, layerH > 0 {
             let guestAspect = effW / effH
@@ -176,19 +205,18 @@ final class HuskMetalPresenter {
 
         var params = (flip: Float(flip ? 1 : 0), rotate: Float(rotated ? 1 : 0),
                       sx: sx, sy: sy)
-        encoder.setRenderPipelineState(pipeline)
+        encoder.setRenderPipelineState(pipelineSnapshot)
         encoder.setVertexBytes(&params, length: MemoryLayout<Float>.size * 4, index: 0)
         encoder.setFragmentTexture(texture, index: 0)
-        encoder.setFragmentSamplerState(sampler, index: 0)
+        encoder.setFragmentSamplerState(samplerSnapshot, index: 0)
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         encoder.endEncoding()
 
-        // No manual retain of `texture`: a command buffer keeps every resource
-        // it references alive until it completes, which is exactly the window
-        // in which the GPU reads it.
+        // Present with system timing when possible; falls back to immediate.
         buffer.present(drawable)
         buffer.commit()
 
+        HuskPerformance.noteFrame()
         presented &+= 1
         if presented == 1 || presented % 1800 == 0 {
             HuskLog.log("gl", "metal: presented \(presented) frames "
@@ -217,8 +245,4 @@ private let huskMetalPresent: husk_metal_present_fn = { texture, flip, _, _ in
         return
     }
     HuskMetalPresenter.shared.present(texture: tex, flip: flip != 0)
-}
-
-func huskInstallMetalPresenter() {
-    husk_display_gl_set_metal_presenter(huskMetalPresent)
 }

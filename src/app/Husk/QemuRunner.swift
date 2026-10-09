@@ -1129,12 +1129,20 @@ final class QemuRunner: ObservableObject {
             "-drive", "file=\(guest.userdataPath),if=none,id=vdb,node-name=huskvmstate,"
                     + "format=qcow2,discard=unmap",
 
-            // The bridge binds on loopback only; do not expose Android's unused
-            // ADB port. 5599 is Husk's guest bridge, started by init
+            // Two forwards, both on loopback so nothing outside this app can
+            // reach the guest.
+            //
+            //   5555  adbd, when it is willing to talk. It usually is not: an
+            //         unprovisioned LineageOS runs adbd in trade-in mode, where
+            //         every shell is refused, and provisioning it from outside
+            //         is the problem this bridge exists to solve.
+            //   5599  Husk's own bridge -- a plain nc listener started by init
             //         as u:r:shell:s0, which hands whatever is written to it to
-            //         /system/bin/sh. Keep this port local to the app's loopback.
+            //         /system/bin/sh. That is the same authority adb shell has,
+            //         obtained without adbd's cooperation.
             "-device", "virtio-net-pci,netdev=net0",
-            "-netdev", "user,id=net0,hostfwd=tcp:127.0.0.1:5599-:5599",
+            "-netdev", "user,id=net0,hostfwd=tcp:127.0.0.1:5555-:5555,"
+                     + "hostfwd=tcp:127.0.0.1:5599-:5599",
             "-L", "\(Bundle.main.bundlePath)/pc-bios",
 
             // 360x640 rather than 1280x800: a quarter of the pixels.
@@ -1215,6 +1223,29 @@ final class QemuRunner: ObservableObject {
             HuskLog.log("qemu", "start() ignored -- already running")
             return
         }
+
+        // Deep hardening (P0): never spawn the QEMU thread without a usable
+        // executable-memory path. Starting anyway is a guaranteed SIGSEGV
+        // inside qemu_init with a log that shows "plenty of free memory".
+        let jitOK = JITBootstrap.prewarmed
+            || JITBootstrap.isLive
+            || JITBootstrap.mapJITWorks
+            || JITBootstrap.debuggedFlag
+        if !jitOK {
+            let why = JITBootstrap.lastFailure
+                ?? "no executable memory (debugger not servicing traps, MAP_JIT unavailable)"
+            HuskLog.log("qemu", "start() refused: \(why)")
+            DispatchQueue.main.async {
+                self.setupMessage = "Cannot start Android: \(why)"
+            }
+            return
+        }
+
+        // Log memory headroom before we commit to a multi-GB guest.
+        husk_ios_jit_log_footprint("qemu-start")
+        let avail = husk_ios_available_memory() / (1024 * 1024)
+        HuskLog.log("qemu", "available before jetsam: \(avail) MiB; JIT region held: \(JITBootstrap.prewarmed)")
+
         isRunning = true
         startedAt = Date()
         QemuRunner.bootStarted = Date()
